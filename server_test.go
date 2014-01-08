@@ -1,6 +1,7 @@
 package dhcp4server
 
 import (
+	"encoding/json"
 	"github.com/d2g/dhcp4"
 	"github.com/d2g/dhcp4server/leasepool/memorypool"
 	"log"
@@ -12,7 +13,7 @@ import (
 /*
  * Example Server :D
  */
-func Test_ExampleServer(test *testing.T) {
+func ExampleServer() {
 	//Configure the Server:
 	myConfiguration := Configuration{}
 
@@ -55,4 +56,43 @@ func Test_ExampleServer(test *testing.T) {
 	if err != nil {
 		log.Fatalln("Error Starting Server:" + err.Error())
 	}
+}
+
+/*
+ * Test Configuration Marshalling
+ */
+func TestConfigurationJSONMarshalling(test *testing.T) {
+	var err error
+
+	startConfiguration := Configuration{}
+	startConfiguration.IP = net.IPv4(192, 168, 0, 1)
+	startConfiguration.DefaultGateway = net.IPv4(192, 168, 0, 254)
+	startConfiguration.DNSServers = []net.IP{net.IPv4(208, 67, 222, 222), net.IPv4(208, 67, 220, 220)}
+	startConfiguration.SubnetMask = net.IPv4(255, 255, 255, 0)
+	startConfiguration.LeaseDuration = 24 * time.Hour
+	startConfiguration.IgnoreIPs = []net.IP{net.IPv4(192, 168, 0, 100)}
+
+	startConfiguration.IgnoreHardwareAddress = make([]net.HardwareAddr, 0)
+	exampleMac, err := net.ParseMAC("00:00:00:00:00:00")
+	if err != nil {
+		test.Error("Error Parsing Mac Address:" + err.Error())
+	}
+	startConfiguration.IgnoreHardwareAddress = append(startConfiguration.IgnoreHardwareAddress, exampleMac)
+
+	test.Logf("Configuration Object:%v\n", startConfiguration)
+
+	bytestartConfiguration, err := json.Marshal(startConfiguration)
+	if err != nil {
+		test.Error("Error Marshaling to JSON:" + err.Error())
+	}
+
+	test.Log("As JSON:" + string(bytestartConfiguration))
+
+	endConfiguration := Configuration{}
+	err = json.Unmarshal(bytestartConfiguration, &endConfiguration)
+	if err != nil {
+		test.Error("Error Unmarshaling to JSON:" + err.Error())
+	}
+
+	test.Logf("Configuration Object:%v\n", endConfiguration)
 }
