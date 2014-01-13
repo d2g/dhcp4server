@@ -56,7 +56,9 @@ func (this *Lease) UnmarshalJSON(data []byte) error {
 
 	this.IP = net.ParseIP(stringUnMarshal.IP)
 	this.Status = LeaseStatus(stringUnMarshal.Status)
-	this.MACAddress, err = net.ParseMAC(stringUnMarshal.MACAddress)
+	if stringUnMarshal.MACAddress != "" {
+		this.MACAddress, err = net.ParseMAC(stringUnMarshal.MACAddress)
+	}
 
 	if err != nil {
 		return err
