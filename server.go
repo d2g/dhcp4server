@@ -140,6 +140,9 @@ func (this *Server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
 		lease.MACAddress = packet.CHAddr()
 		lease.Status = leasepool.Active
 
+		//TODO:
+		//lease.Expiry = (this.Configuration.LeaseDuration * time.Second)
+
 		if packetOptions[dhcp4.OptionHostName] != nil && string(packetOptions[dhcp4.OptionHostName]) != "" {
 			lease.Hostname = string(packetOptions[dhcp4.OptionHostName])
 		}
@@ -189,8 +192,9 @@ func (this *Server) OfferPacket(discoverPacket dhcp4.Packet) dhcp4.Packet {
 	offerPacket.SetXId(discoverPacket.XId())
 	offerPacket.SetFlags(discoverPacket.Flags())
 
-	offerPacket.SetGIAddr(discoverPacket.GIAddr())
 	offerPacket.SetCHAddr(discoverPacket.CHAddr())
+	offerPacket.SetSIAddr(this.Configuration.IP)
+	offerPacket.SetGIAddr(discoverPacket.GIAddr())
 	offerPacket.SetSecs(discoverPacket.Secs())
 
 	offerPacket.AddOption(dhcp4.OptionServerIdentifier, this.Configuration.IP.To4())
@@ -198,6 +202,7 @@ func (this *Server) OfferPacket(discoverPacket dhcp4.Packet) dhcp4.Packet {
 	offerPacket.AddOption(dhcp4.OptionRouter, this.Configuration.DefaultGateway.To4())
 	offerPacket.AddOption(dhcp4.OptionDomainNameServer, dhcp4.JoinIPs(this.Configuration.DNSServers))
 	offerPacket.AddOption(dhcp4.OptionDHCPMessageType, []byte{byte(dhcp4.Offer)})
+	offerPacket.AddOption(dhcp4.OptionIPAddressLeaseTime, dhcp4.OptionsLeaseTime(this.Configuration.LeaseDuration*time.Second))
 
 	return offerPacket
 
@@ -214,12 +219,14 @@ func (this *Server) AcknowledgementPacket(requestPacket dhcp4.Packet) dhcp4.Pack
 
 	acknowledgementPacket.SetGIAddr(requestPacket.GIAddr())
 	acknowledgementPacket.SetCHAddr(requestPacket.CHAddr())
+	acknowledgementPacket.SetSIAddr(this.Configuration.IP)
 	acknowledgementPacket.SetSecs(requestPacket.Secs())
 
 	acknowledgementPacket.AddOption(dhcp4.OptionServerIdentifier, this.Configuration.IP.To4())
 	acknowledgementPacket.AddOption(dhcp4.OptionSubnetMask, this.Configuration.SubnetMask.To4())
 	acknowledgementPacket.AddOption(dhcp4.OptionRouter, this.Configuration.DefaultGateway.To4())
 	acknowledgementPacket.AddOption(dhcp4.OptionDomainNameServer, dhcp4.JoinIPs(this.Configuration.DNSServers))
+	acknowledgementPacket.AddOption(dhcp4.OptionIPAddressLeaseTime, dhcp4.OptionsLeaseTime(this.Configuration.LeaseDuration*time.Second))
 
 	return acknowledgementPacket
 }

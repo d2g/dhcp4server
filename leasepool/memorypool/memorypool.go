@@ -98,7 +98,7 @@ func (this *MemoryPool) ReserveLease(reserveLease *leasepool.Lease) (bool, error
 			}
 		}
 	}
-	return false, errors.New("IP is Not In Pool")
+	return false, errors.New("Reserve Lease, IP is Not In Pool")
 }
 
 func (this *MemoryPool) AcceptLease(acceptLease *leasepool.Lease) (bool, error) {
@@ -143,7 +143,7 @@ func (this *MemoryPool) AcceptLease(acceptLease *leasepool.Lease) (bool, error) 
 
 		}
 	}
-	return false, errors.New("IP is Not In Pool")
+	return false, errors.New("Accept Lease, IP is Not In Pool")
 }
 
 /*
