@@ -77,7 +77,7 @@ func (this *MemoryPool) ReserveLease(reserveLease *leasepool.Lease) (bool, error
 	this.cleanupLeases(reserveLease)
 
 	//Reserve the Pool
-	for i, _ := range this.Pool {
+	for i := range this.Pool {
 		if this.Pool[i].IP.Equal(reserveLease.IP) {
 			if this.Pool[i].Status != leasepool.Active {
 				//The Lease Is Not Active
@@ -98,13 +98,14 @@ func (this *MemoryPool) ReserveLease(reserveLease *leasepool.Lease) (bool, error
 			}
 		}
 	}
-	return false, errors.New("Reserve Lease, IP is Not In Pool")
+	return false, nil
+	//return false, errors.New("Reserve Lease, IP is Not In Pool")
 }
 
 func (this *MemoryPool) AcceptLease(acceptLease *leasepool.Lease) (bool, error) {
 	this.cleanupLeases(acceptLease)
 
-	for i, _ := range this.Pool {
+	for i := range this.Pool {
 		if this.Pool[i].IP.Equal(acceptLease.IP) {
 			//This is the Lease We Requested.
 			if this.Pool[i].MACAddress.String() == acceptLease.MACAddress.String() {
@@ -143,7 +144,8 @@ func (this *MemoryPool) AcceptLease(acceptLease *leasepool.Lease) (bool, error) 
 
 		}
 	}
-	return false, errors.New("Accept Lease, IP is Not In Pool")
+	return false, nil
+	//return false, errors.New("Accept Lease, IP is Not In Pool")
 }
 
 /*
@@ -152,7 +154,7 @@ func (this *MemoryPool) AcceptLease(acceptLease *leasepool.Lease) (bool, error) 
  */
 func (this *MemoryPool) cleanupLeases(requestedLease *leasepool.Lease) {
 
-	for i, _ := range this.Pool {
+	for i := range this.Pool {
 
 		//Only Ever Bother to Clean Up Active or Reserved Leases
 		if this.Pool[i].Status == leasepool.Active || this.Pool[i].Status == leasepool.Reserved {

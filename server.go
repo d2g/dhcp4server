@@ -77,19 +77,23 @@ func (this *Server) ListenAndServe() error {
 			}
 		}
 
-		go func() {
-			returnPacket, err := this.ServeDHCP(packet)
-			if err != nil {
-				log.Println("Error Serving DHCP:" + err.Error())
-				return
-			}
+		//We need to stop butting in with other servers.
+		if packet.SIAddr().Equal(net.IPv4(0, 0, 0, 0)) || packet.SIAddr().Equal(net.IP{}) || packet.SIAddr().Equal(this.Configuration.IP) {
 
-			if len(packet) > 0 {
-				this.outboundMutex.Lock()
-				this.outbound.Write(returnPacket)
-				this.outboundMutex.Unlock()
-			}
-		}()
+			go func() {
+				returnPacket, err := this.ServeDHCP(packet)
+				if err != nil {
+					log.Println("Error Serving DHCP:" + err.Error())
+					return
+				}
+
+				if len(packet) > 0 {
+					this.outboundMutex.Lock()
+					this.outbound.Write(returnPacket)
+					this.outboundMutex.Unlock()
+				}
+			}()
+		}
 	}
 }
 
@@ -153,10 +157,10 @@ func (this *Server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
 		}
 
 		acknowledgementPacket := this.AcknowledgementPacket(packet)
-		acknowledgementPacket.SetYIAddr(lease.IP)
 
 		if accepted {
 			//ACK
+			acknowledgementPacket.SetYIAddr(lease.IP)
 			acknowledgementPacket.AddOption(dhcp4.OptionDHCPMessageType, []byte{byte(dhcp4.ACK)})
 			//Lease time.
 			acknowledgementPacket.AddOption(dhcp4.OptionIPAddressLeaseTime, dhcp4.OptionsLeaseTime(lease.Expiry.Sub(time.Now())))
