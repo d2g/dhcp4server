@@ -5,19 +5,45 @@ import (
 )
 
 /*
- * Notes: The LeasePool should be self managing.
- * When GetLease is Called if there are no Leases Available
- * it should free up it's own leases if possible.
+ * Lease.IP is the Key.
  */
 type LeasePool interface {
-	//Add An Array of IP's to the Pool of Leases (This should add new but not replace existing leases).
-	AddToPool([]net.IP) error
+	//Add A Lease To The Pool
+	AddLease(Lease) error
+
+	//Remove
+	RemoveLease(net.IP) error
+
 	//Remove All Leases from the Pool (Required for Persistant LeaseManagers)
-	PurgePool() error
-	//Get The Next Free lease or Get the lease already in use by that hardware address.
-	GetLease(net.HardwareAddr) (Lease, error)
-	//Reserve
-	ReserveLease(*Lease) (bool, error)
-	//Accept Lease
-	AcceptLease(*Lease) (bool, error)
+	PurgeLeases() error
+
+	/*
+	 * Get the Lease
+	 * -Found
+	 * -Copy Of the Lease
+	 * -Any Error
+	 */
+	GetLease(net.IP) (bool, Lease, error)
+
+	//Get the lease already in use by that hardware address.
+	GetLeaseForHardwareAddress(net.HardwareAddr) (bool, Lease, error)
+
+	/*
+	 * -Lease Available
+	 * -Lease
+	 * -Error
+	 */
+	GetNextFreeLease() (bool, Lease, error)
+
+	/*
+	 * Return All Leases
+	 */
+	GetLeases() ([]Lease, error)
+
+	/*
+	 * Update Lease
+	 * - Has Updated
+	 * - Error
+	 */
+	UpdateLease(Lease) (bool, error)
 }

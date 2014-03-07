@@ -7,7 +7,6 @@ import (
 	"github.com/d2g/dhcp4server/leasepool"
 	"log"
 	"net"
-	"sync"
 	"time"
 )
 
@@ -18,12 +17,11 @@ type Server struct {
 	Configuration *Configuration      //Server Configuration
 	LeasePool     leasepool.LeasePool //Lease Pool Manager
 
-	//Listeners & Response Connection.
-	inbound *net.UDPConn
+	//Used to Gracefully Close the Server
+	shutdown bool
 
-	//Outbound Connections are threaded.
-	outbound      *net.UDPConn
-	outboundMutex sync.Mutex
+	//Listeners & Response Connection.
+	connection *net.UDPConn
 }
 
 /*
@@ -32,26 +30,47 @@ type Server struct {
 func (this *Server) ListenAndServe() error {
 	var err error
 
-	inboundAddress := net.UDPAddr{IP: net.IPv4(0, 0, 0, 0), Port: 67}
-	this.inbound, err = net.ListenUDP("udp4", &inboundAddress)
-	if err != nil {
-		return err
-	}
-	defer this.inbound.Close()
+	//this.shutdown = make(chan bool)
+	//defer close(this.shutdown)
 
+	inboundAddress := net.UDPAddr{IP: net.IPv4(0, 0, 0, 0), Port: 67}
 	outboundAddress := net.UDPAddr{IP: net.IPv4bcast, Port: 68}
-	this.outbound, err = net.DialUDP("udp4", nil, &outboundAddress)
+	this.connection, err = net.ListenUDP("udp4", &inboundAddress)
 	if err != nil {
 		return err
 	}
-	defer this.outbound.Close()
+	defer this.connection.Close()
 
 	//Make Our Buffer (Max Buffer is 574) "I believe this 576 size comes from RFC 791" - Random Mailing list quote of the day.
 	buffer := make([]byte, 576)
+
 	for {
-		//Listen For Packets
-		n, source, err := this.inbound.ReadFrom(buffer)
+	ListenForDHCPPackets:
+		if this.shutdown {
+			return nil
+		}
+
+		//Set Read Deadline
+		this.connection.SetReadDeadline(time.Now().Add(time.Second))
+		// Read Packet
+		n, source, err := this.connection.ReadFrom(buffer)
 		if err != nil {
+
+			switch v := err.(type) {
+			case *net.OpError:
+				if v.Timeout() {
+					goto ListenForDHCPPackets
+				}
+			case *net.AddrError:
+				if v.Timeout() {
+					goto ListenForDHCPPackets
+				}
+			case *net.UnknownNetworkError:
+				if v.Timeout() {
+					goto ListenForDHCPPackets
+				}
+			}
+
 			log.Println("Error:" + err.Error())
 			return err
 		}
@@ -80,20 +99,21 @@ func (this *Server) ListenAndServe() error {
 		//We need to stop butting in with other servers.
 		if packet.SIAddr().Equal(net.IPv4(0, 0, 0, 0)) || packet.SIAddr().Equal(net.IP{}) || packet.SIAddr().Equal(this.Configuration.IP) {
 
-			go func() {
-				returnPacket, err := this.ServeDHCP(packet)
-				if err != nil {
-					log.Println("Error Serving DHCP:" + err.Error())
-					return
-				}
+			returnPacket, err := this.ServeDHCP(packet)
+			if err != nil {
+				log.Println("Error Serving DHCP:" + err.Error())
+				return err
+			}
 
-				if len(packet) > 0 {
-					this.outboundMutex.Lock()
-					this.outbound.Write(returnPacket)
-					this.outboundMutex.Unlock()
+			if len(packet) > 0 {
+				_, err := this.connection.WriteTo(returnPacket, &outboundAddress)
+				if err != nil {
+					log.Println("Error Writing:" + err.Error())
+					return err
 				}
-			}()
+			}
 		}
+
 	}
 }
 
@@ -105,32 +125,36 @@ func (this *Server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
 
 		//Discover Received from client
 		//Lets get the lease we're going to send them
-		lease, err := this.LeasePool.GetLease(packet.CHAddr())
+		found, lease, err := this.GetLease(packet)
 		if err != nil {
-			//If we don't have a lease lets just be quiet about things.
 			return dhcp4.Packet{}, err
 		}
 
-		offerPacket := this.OfferPacket(packet)
+		if !found {
+			log.Println("It Looks Like Our Leases Are Depleted...")
+			return dhcp4.Packet{}, nil
+		}
 
+		offerPacket := this.OfferPacket(packet)
 		offerPacket.SetYIAddr(lease.IP)
 		offerPacket.PadToMinSize()
 
-		lease.Status = leasepool.Reserved
+		lease.Reserve()
 		lease.MACAddress = packet.CHAddr()
 
 		if packetOptions[dhcp4.OptionHostName] != nil && string(packetOptions[dhcp4.OptionHostName]) != "" {
 			lease.Hostname = string(packetOptions[dhcp4.OptionHostName])
 		}
 
+		//TODO: Fix
 		lease.Expiry = time.Now().Add(time.Duration(5) * time.Minute)
 
-		reserved, err := this.LeasePool.ReserveLease(&lease)
+		updated, err := this.LeasePool.UpdateLease(lease)
 		if err != nil {
 			return dhcp4.Packet{}, err
 		}
 
-		if !reserved {
+		if !updated {
 			//Unable to reserve lease (It's now active else where maybe?)
 			return dhcp4.Packet{}, errors.New("Unable to Reserve Lease:" + lease.IP.String())
 		}
@@ -138,35 +162,49 @@ func (this *Server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
 		return offerPacket, nil
 	case dhcp4.Request:
 		//Request Received from client
-		lease := leasepool.Lease{}
-
-		lease.IP = net.IP(packetOptions[dhcp4.OptionRequestedIPAddress])
-		lease.MACAddress = packet.CHAddr()
-		lease.Status = leasepool.Active
-
-		//TODO:
-		//lease.Expiry = (this.Configuration.LeaseDuration * time.Second)
-
-		if packetOptions[dhcp4.OptionHostName] != nil && string(packetOptions[dhcp4.OptionHostName]) != "" {
-			lease.Hostname = string(packetOptions[dhcp4.OptionHostName])
-		}
-
-		accepted, err := this.LeasePool.AcceptLease(&lease)
+		//Lets get the lease we're going to send them
+		found, lease, err := this.GetLease(packet)
 		if err != nil {
 			return dhcp4.Packet{}, err
 		}
 
+		if !found {
+			log.Println("It Looks Like Our Leases Are Depleted...")
+			return dhcp4.Packet{}, nil
+		}
+
 		acknowledgementPacket := this.AcknowledgementPacket(packet)
 
-		if accepted {
-			//ACK
-			acknowledgementPacket.SetYIAddr(lease.IP)
-			acknowledgementPacket.AddOption(dhcp4.OptionDHCPMessageType, []byte{byte(dhcp4.ACK)})
-			//Lease time.
-			acknowledgementPacket.AddOption(dhcp4.OptionIPAddressLeaseTime, dhcp4.OptionsLeaseTime(lease.Expiry.Sub(time.Now())))
-		} else {
+		//If the lease is not the one requested We should send a NAK..
+		if len(packetOptions) > 0 && !net.IP(packetOptions[dhcp4.OptionRequestedIPAddress]).Equal(lease.IP) {
 			//NAK
 			acknowledgementPacket.AddOption(dhcp4.OptionDHCPMessageType, []byte{byte(dhcp4.NAK)})
+		} else {
+			lease.Active()
+			lease.MACAddress = packet.CHAddr()
+
+			//TODO: Fix
+			lease.Expiry = time.Now().Add(time.Duration(24) * time.Minute)
+
+			if packetOptions[dhcp4.OptionHostName] != nil && string(packetOptions[dhcp4.OptionHostName]) != "" {
+				lease.Hostname = string(packetOptions[dhcp4.OptionHostName])
+			}
+
+			updated, err := this.LeasePool.UpdateLease(lease)
+			if err != nil {
+				return dhcp4.Packet{}, err
+			}
+
+			if updated {
+				//ACK
+				acknowledgementPacket.SetYIAddr(lease.IP)
+				acknowledgementPacket.AddOption(dhcp4.OptionDHCPMessageType, []byte{byte(dhcp4.ACK)})
+				//Lease time.
+				acknowledgementPacket.AddOption(dhcp4.OptionIPAddressLeaseTime, dhcp4.OptionsLeaseTime(lease.Expiry.Sub(time.Now())))
+			} else {
+				//NAK
+				acknowledgementPacket.AddOption(dhcp4.OptionDHCPMessageType, []byte{byte(dhcp4.NAK)})
+			}
 		}
 
 		acknowledgementPacket.PadToMinSize()
@@ -233,4 +271,52 @@ func (this *Server) AcknowledgementPacket(requestPacket dhcp4.Packet) dhcp4.Pack
 	acknowledgementPacket.AddOption(dhcp4.OptionIPAddressLeaseTime, dhcp4.OptionsLeaseTime(this.Configuration.LeaseDuration*time.Second))
 
 	return acknowledgementPacket
+}
+
+/*
+ * Get Lease tries to work out the best lease for the packet supplied.
+ * Taking into account all Requested IP, Exisitng MACAddresses and Free leases.
+ */
+func (t *Server) GetLease(packet dhcp4.Packet) (found bool, lease leasepool.Lease, err error) {
+	packetOptions := packet.ParseOptions()
+
+	//Requested an IP
+	if (len(packetOptions) > 0) &&
+		packetOptions[dhcp4.OptionRequestedIPAddress] != nil &&
+		!net.IP(packetOptions[dhcp4.OptionRequestedIPAddress]).Equal(net.IP{}) {
+		//An IP Has Been Requested Let's Try and Get that One.
+
+		found, lease, err = t.LeasePool.GetLease(net.IP(packetOptions[dhcp4.OptionRequestedIPAddress]))
+		if err != nil {
+			return
+		}
+
+		if found {
+			if lease.Status == leasepool.Free {
+				//Lease Is Free you Can Have it.
+				return
+			}
+			if lease.Status != leasepool.Free && bytes.Equal(lease.MACAddress, packet.CHAddr()) {
+				//Lease isn't free but it's yours
+				return
+			}
+		}
+	}
+
+	//Ok Even if you requested an IP you can't have it.
+	found, lease, err = t.LeasePool.GetLeaseForHardwareAddress(packet.CHAddr())
+	if found || err != nil {
+		return
+	}
+
+	//Just get the next free lease if you can.
+	found, lease, err = t.LeasePool.GetNextFreeLease()
+	return
+}
+
+/*
+ * Shutdown The Server Gracefully
+ */
+func (t *Server) Shutdown() {
+	t.shutdown = true
 }

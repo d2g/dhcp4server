@@ -93,3 +93,13 @@ func (this Lease) Equal(other Lease) bool {
 
 	return true
 }
+
+func (t *Lease) Reserve() {
+	//TODO: This is a function Because we really should start a process to GC if it's not then accepted.
+	t.Status = Reserved
+}
+
+func (t *Lease) Active() {
+	//TODO: It's Accepted Stop it being tidied up
+	t.Status = Active
+}
