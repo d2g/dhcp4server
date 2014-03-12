@@ -22,8 +22,9 @@ type Server struct {
 
 	//Listeners & Response Connection.
 	inbound *net.UDPConn
-
 	outbound *net.UDPConn
+	
+	
 }
 
 /*
@@ -33,18 +34,16 @@ func (this *Server) ListenAndServe() error {
 	var err error
 
 	inboundAddress := net.UDPAddr{IP: net.IPv4(0, 0, 0, 0), Port: 67}
+	
+	outboundAddressFrom := net.UDPAddr{IP: this.Configuration.IP, Port: 67}
+	outboundAddressTo := net.UDPAddr{IP: net.IPv4bcast, Port: 68}
+	
 	this.inbound, err = net.ListenUDP("udp4", &inboundAddress)
 	if err != nil {
 		return err
 	}
 	defer this.inbound.Close()
-
-	outboundAddress := net.UDPAddr{IP: net.IPv4bcast, Port: 68}
-	this.outbound, err = net.DialUDP("udp4", nil, &outboundAddress)
-	if err != nil {
-		return err
-	}
-	defer this.outbound.Close()
+	
 
 	//Make Our Buffer (Max Buffer is 574) "I believe this 576 size comes from RFC 791" - Random Mailing list quote of the day.
 	buffer := make([]byte, 576)
@@ -129,11 +128,25 @@ func (this *Server) ListenAndServe() error {
 			log.Printf("Debug: Packet Client Mac: %v\n", returnPacket.CHAddr().String())
 
 			if len(packet) > 0 {
+				this.inbound.Close()
+
+				this.outbound, err = net.DialUDP("udp4", &outboundAddressFrom, &outboundAddressTo)
+				if err != nil {
+					return err
+				}
+
 				_, err := this.outbound.Write(returnPacket)
+				this.outbound.Close()
+				
 				if err != nil {
 					log.Println("Error Writing:" + err.Error())
 					return err
 				}
+				
+				this.inbound, err = net.ListenUDP("udp4", &inboundAddress)
+				if err != nil {
+					return err
+				}				
 			}
 		}
 
