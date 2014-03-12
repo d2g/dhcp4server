@@ -64,6 +64,14 @@ func ExampleServer() {
 }
 
 /*
+ * Dummy Test This allows us to run a server Independantly
+ */
+func TestDummyTest(test *testing.T){
+	myServer := GetTestServerInstance()
+	myServer.ListenAndServe()
+}
+
+/*
  * Test Server Used In Tests.
  */
 func GetTestServerInstance() Server {
@@ -342,7 +350,12 @@ func TestRequestOutOfRangeLease(test *testing.T) {
 	wg.Wait()
 }
 
+/*
+ * 
+ */
 func TestConsumeLeases(test *testing.T) {
+	test.SkipNow()
+	
 	//Setup the Server
 	myServer := GetTestServerInstance()
 
