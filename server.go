@@ -68,6 +68,8 @@ func (this *Server) ListenAndServe() error {
 
 		packet := dhcp4.Packet(buffer[:n])
 
+		log.Printf("%v\n",packet)
+
 		//We can ignore hardware addresses.
 		//Usefull for ignoring a range of hardware addresses
 		for _, hardwareAddressToIgnore := range this.Configuration.IgnoreHardwareAddress {
@@ -86,6 +88,8 @@ func (this *Server) ListenAndServe() error {
 					log.Println("Error Serving DHCP:" + err.Error())
 					return
 				}
+
+				log.Printf("%v\n",returnPacket)
 
 				if len(packet) > 0 {
 					this.outboundMutex.Lock()
