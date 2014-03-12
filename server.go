@@ -21,7 +21,9 @@ type Server struct {
 	shutdown bool
 
 	//Listeners & Response Connection.
-	connection *net.UDPConn
+	inbound *net.UDPConn
+
+	outbound *net.UDPConn
 }
 
 /*
@@ -30,16 +32,19 @@ type Server struct {
 func (this *Server) ListenAndServe() error {
 	var err error
 
-	//this.shutdown = make(chan bool)
-	//defer close(this.shutdown)
-
 	inboundAddress := net.UDPAddr{IP: net.IPv4(0, 0, 0, 0), Port: 67}
-	outboundAddress := net.UDPAddr{IP: net.IPv4bcast, Port: 68}
-	this.connection, err = net.ListenUDP("udp4", &inboundAddress)
+	this.inbound, err = net.ListenUDP("udp4", &inboundAddress)
 	if err != nil {
 		return err
 	}
-	defer this.connection.Close()
+	defer this.inbound.Close()
+
+	outboundAddress := net.UDPAddr{IP: net.IPv4bcast, Port: 68}
+	this.outbound, err = net.DialUDP("udp4", nil, &outboundAddress)
+	if err != nil {
+		return err
+	}
+	defer this.outbound.Close()
 
 	//Make Our Buffer (Max Buffer is 574) "I believe this 576 size comes from RFC 791" - Random Mailing list quote of the day.
 	buffer := make([]byte, 576)
@@ -51,9 +56,9 @@ func (this *Server) ListenAndServe() error {
 		}
 
 		//Set Read Deadline
-		this.connection.SetReadDeadline(time.Now().Add(time.Second))
+		this.inbound.SetReadDeadline(time.Now().Add(time.Second))
 		// Read Packet
-		n, source, err := this.connection.ReadFrom(buffer)
+		n, source, err := this.inbound.ReadFrom(buffer)
 		if err != nil {
 
 			switch v := err.(type) {
@@ -96,6 +101,15 @@ func (this *Server) ListenAndServe() error {
 			}
 		}
 
+		log.Printf("Debug: Packet Received:%v\n", packet)
+		log.Printf("Debug: Packet Received ID:%v\n", packet.XId())
+		log.Printf("Debug: Packet Options:%v\n", packet.ParseOptions())
+		log.Printf("Debug: Packet Client IP : %v\n", packet.CIAddr().String())
+		log.Printf("Debug: Packet Your IP   : %v\n", packet.YIAddr().String())
+		log.Printf("Debug: Packet Server IP : %v\n", packet.SIAddr().String())
+		log.Printf("Debug: Packet Gateway IP: %v\n", packet.GIAddr().String())
+		log.Printf("Debug: Packet Client Mac: %v\n", packet.CHAddr().String())
+
 		//We need to stop butting in with other servers.
 		if packet.SIAddr().Equal(net.IPv4(0, 0, 0, 0)) || packet.SIAddr().Equal(net.IP{}) || packet.SIAddr().Equal(this.Configuration.IP) {
 
@@ -105,8 +119,17 @@ func (this *Server) ListenAndServe() error {
 				return err
 			}
 
+			log.Printf("Debug: Packet Returned:%v\n", returnPacket)
+			log.Printf("Debug: Packet Returned ID:%v\n", returnPacket.XId())
+			log.Printf("Debug: Packet Options:%v\n", returnPacket.ParseOptions())
+			log.Printf("Debug: Packet Client IP : %v\n", returnPacket.CIAddr().String())
+			log.Printf("Debug: Packet Your IP   : %v\n", returnPacket.YIAddr().String())
+			log.Printf("Debug: Packet Server IP : %v\n", returnPacket.SIAddr().String())
+			log.Printf("Debug: Packet Gateway IP: %v\n", returnPacket.GIAddr().String())
+			log.Printf("Debug: Packet Client Mac: %v\n", returnPacket.CHAddr().String())
+
 			if len(packet) > 0 {
-				_, err := this.connection.WriteTo(returnPacket, &outboundAddress)
+				_, err := this.outbound.Write(returnPacket)
 				if err != nil {
 					log.Println("Error Writing:" + err.Error())
 					return err
@@ -137,6 +160,10 @@ func (this *Server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
 
 		offerPacket := this.OfferPacket(packet)
 		offerPacket.SetYIAddr(lease.IP)
+
+		//Sort out the packet options
+		log.Printf("%v\n", packetOptions[dhcp4.OptionParameterRequestList])
+
 		offerPacket.PadToMinSize()
 
 		lease.Reserve()
@@ -145,9 +172,6 @@ func (this *Server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
 		if packetOptions[dhcp4.OptionHostName] != nil && string(packetOptions[dhcp4.OptionHostName]) != "" {
 			lease.Hostname = string(packetOptions[dhcp4.OptionHostName])
 		}
-
-		//TODO: Fix
-		lease.Expiry = time.Now().Add(time.Duration(5) * time.Minute)
 
 		updated, err := this.LeasePool.UpdateLease(lease)
 		if err != nil {
@@ -173,18 +197,18 @@ func (this *Server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
 			return dhcp4.Packet{}, nil
 		}
 
-		acknowledgementPacket := this.AcknowledgementPacket(packet)
-
 		//If the lease is not the one requested We should send a NAK..
 		if len(packetOptions) > 0 && !net.IP(packetOptions[dhcp4.OptionRequestedIPAddress]).Equal(lease.IP) {
 			//NAK
-			acknowledgementPacket.AddOption(dhcp4.OptionDHCPMessageType, []byte{byte(dhcp4.NAK)})
+			declinePacket := this.DeclinePacket(packet)
+			declinePacket.PadToMinSize()
+
+			return declinePacket, nil
 		} else {
 			lease.Active()
 			lease.MACAddress = packet.CHAddr()
 
-			//TODO: Fix
-			lease.Expiry = time.Now().Add(time.Duration(24) * time.Minute)
+			lease.Expiry = time.Now().Add(this.Configuration.LeaseDuration)
 
 			if packetOptions[dhcp4.OptionHostName] != nil && string(packetOptions[dhcp4.OptionHostName]) != "" {
 				lease.Hostname = string(packetOptions[dhcp4.OptionHostName])
@@ -197,19 +221,22 @@ func (this *Server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
 
 			if updated {
 				//ACK
+				acknowledgementPacket := this.AcknowledgementPacket(packet)
 				acknowledgementPacket.SetYIAddr(lease.IP)
-				acknowledgementPacket.AddOption(dhcp4.OptionDHCPMessageType, []byte{byte(dhcp4.ACK)})
+
 				//Lease time.
 				acknowledgementPacket.AddOption(dhcp4.OptionIPAddressLeaseTime, dhcp4.OptionsLeaseTime(lease.Expiry.Sub(time.Now())))
+				acknowledgementPacket.PadToMinSize()
+
+				return acknowledgementPacket, nil
 			} else {
 				//NAK
-				acknowledgementPacket.AddOption(dhcp4.OptionDHCPMessageType, []byte{byte(dhcp4.NAK)})
+				declinePacket := this.DeclinePacket(packet)
+				declinePacket.PadToMinSize()
+
+				return declinePacket, nil
 			}
 		}
-
-		acknowledgementPacket.PadToMinSize()
-
-		return acknowledgementPacket, nil
 	case dhcp4.Decline:
 		//Decline from the client:
 		log.Printf("Decline Message:%v\n", packet)
@@ -235,16 +262,42 @@ func (this *Server) OfferPacket(discoverPacket dhcp4.Packet) dhcp4.Packet {
 	offerPacket.SetFlags(discoverPacket.Flags())
 
 	offerPacket.SetCHAddr(discoverPacket.CHAddr())
-	offerPacket.SetSIAddr(this.Configuration.IP)
 	offerPacket.SetGIAddr(discoverPacket.GIAddr())
 	offerPacket.SetSecs(discoverPacket.Secs())
 
-	offerPacket.AddOption(dhcp4.OptionServerIdentifier, this.Configuration.IP.To4())
-	offerPacket.AddOption(dhcp4.OptionSubnetMask, this.Configuration.SubnetMask.To4())
-	offerPacket.AddOption(dhcp4.OptionRouter, this.Configuration.DefaultGateway.To4())
-	offerPacket.AddOption(dhcp4.OptionDomainNameServer, dhcp4.JoinIPs(this.Configuration.DNSServers))
+	//53
 	offerPacket.AddOption(dhcp4.OptionDHCPMessageType, []byte{byte(dhcp4.Offer)})
-	offerPacket.AddOption(dhcp4.OptionIPAddressLeaseTime, dhcp4.OptionsLeaseTime(this.Configuration.LeaseDuration*time.Second))
+	//54
+	offerPacket.AddOption(dhcp4.OptionServerIdentifier, this.Configuration.IP.To4())
+	//51
+	offerPacket.AddOption(dhcp4.OptionIPAddressLeaseTime, dhcp4.OptionsLeaseTime(this.Configuration.LeaseDuration))
+
+	//Other options go in requested order...
+	discoverPacketOptions := discoverPacket.ParseOptions()
+
+	ourOptions := make(dhcp4.Options)
+
+	//1
+	ourOptions[dhcp4.OptionSubnetMask] = this.Configuration.SubnetMask.To4()
+	//3
+	ourOptions[dhcp4.OptionRouter] = this.Configuration.DefaultGateway.To4()
+	//6
+	ourOptions[dhcp4.OptionDomainNameServer] = dhcp4.JoinIPs(this.Configuration.DNSServers)
+
+	if discoverPacketOptions[dhcp4.OptionParameterRequestList] != nil {
+		//Loop through the requested options and if we have them add them.
+		for _, optionCode := range discoverPacketOptions[dhcp4.OptionParameterRequestList] {
+			if !bytes.Equal(ourOptions[dhcp4.OptionCode(optionCode)], []byte{}) {
+				offerPacket.AddOption(dhcp4.OptionCode(optionCode), ourOptions[dhcp4.OptionCode(optionCode)])
+				delete(ourOptions, dhcp4.OptionCode(optionCode))
+			}
+		}
+	}
+
+	//Add all the options not requested.
+	for optionCode, optionValue := range ourOptions {
+		offerPacket.AddOption(optionCode, optionValue)
+	}
 
 	return offerPacket
 
@@ -261,16 +314,37 @@ func (this *Server) AcknowledgementPacket(requestPacket dhcp4.Packet) dhcp4.Pack
 
 	acknowledgementPacket.SetGIAddr(requestPacket.GIAddr())
 	acknowledgementPacket.SetCHAddr(requestPacket.CHAddr())
-	acknowledgementPacket.SetSIAddr(this.Configuration.IP)
 	acknowledgementPacket.SetSecs(requestPacket.Secs())
 
-	acknowledgementPacket.AddOption(dhcp4.OptionServerIdentifier, this.Configuration.IP.To4())
+	acknowledgementPacket.AddOption(dhcp4.OptionDHCPMessageType, []byte{byte(dhcp4.ACK)})
 	acknowledgementPacket.AddOption(dhcp4.OptionSubnetMask, this.Configuration.SubnetMask.To4())
 	acknowledgementPacket.AddOption(dhcp4.OptionRouter, this.Configuration.DefaultGateway.To4())
 	acknowledgementPacket.AddOption(dhcp4.OptionDomainNameServer, dhcp4.JoinIPs(this.Configuration.DNSServers))
-	acknowledgementPacket.AddOption(dhcp4.OptionIPAddressLeaseTime, dhcp4.OptionsLeaseTime(this.Configuration.LeaseDuration*time.Second))
+	acknowledgementPacket.AddOption(dhcp4.OptionServerIdentifier, this.Configuration.IP.To4())
 
 	return acknowledgementPacket
+}
+
+/*
+ * Create DHCP Decline
+ */
+func (this *Server) DeclinePacket(requestPacket dhcp4.Packet) dhcp4.Packet {
+
+	declinePacket := dhcp4.NewPacket(dhcp4.BootReply)
+	declinePacket.SetXId(requestPacket.XId())
+	declinePacket.SetFlags(requestPacket.Flags())
+
+	declinePacket.SetGIAddr(requestPacket.GIAddr())
+	declinePacket.SetCHAddr(requestPacket.CHAddr())
+	declinePacket.SetSecs(requestPacket.Secs())
+
+	declinePacket.AddOption(dhcp4.OptionDHCPMessageType, []byte{byte(dhcp4.NAK)})
+	declinePacket.AddOption(dhcp4.OptionSubnetMask, this.Configuration.SubnetMask.To4())
+	declinePacket.AddOption(dhcp4.OptionRouter, this.Configuration.DefaultGateway.To4())
+	declinePacket.AddOption(dhcp4.OptionDomainNameServer, dhcp4.JoinIPs(this.Configuration.DNSServers))
+	declinePacket.AddOption(dhcp4.OptionServerIdentifier, this.Configuration.IP.To4())
+
+	return declinePacket
 }
 
 /*

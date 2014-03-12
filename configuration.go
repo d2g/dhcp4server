@@ -30,7 +30,7 @@ func (t Configuration) MarshalJSON() ([]byte, error) {
 		(t.DefaultGateway.String()),
 		make([]string, 0),
 		(t.SubnetMask.String()),
-		t.LeaseDuration,
+		(t.LeaseDuration / time.Second),
 		make([]string, 0),
 		make([]string, 0),
 	}
@@ -69,7 +69,7 @@ func (t *Configuration) UnmarshalJSON(data []byte) error {
 	t.IP = net.ParseIP(stringUnMarshal.IP)
 	t.DefaultGateway = net.ParseIP(stringUnMarshal.DefaultGateway)
 	t.SubnetMask = net.ParseIP(stringUnMarshal.SubnetMask)
-	t.LeaseDuration = stringUnMarshal.LeaseDuration
+	t.LeaseDuration = (stringUnMarshal.LeaseDuration * time.Second)
 
 	t.DNSServers = make([]net.IP, 0)
 	for _, value := range stringUnMarshal.DNSServers {
