@@ -2,6 +2,7 @@ package dhcp4server
 
 import (
 	"bytes"
+	"code.google.com/p/go.net/ipv4"
 	"errors"
 	"github.com/d2g/dhcp4"
 	"github.com/d2g/dhcp4server/leasepool"
@@ -21,10 +22,7 @@ type Server struct {
 	shutdown bool
 
 	//Listeners & Response Connection.
-	inbound *net.UDPConn
-	outbound *net.UDPConn
-	
-	
+	connection *ipv4.PacketConn
 }
 
 /*
@@ -34,16 +32,18 @@ func (this *Server) ListenAndServe() error {
 	var err error
 
 	inboundAddress := net.UDPAddr{IP: net.IPv4(0, 0, 0, 0), Port: 67}
-	
-	outboundAddressFrom := net.UDPAddr{IP: this.Configuration.IP, Port: 67}
-	outboundAddressTo := net.UDPAddr{IP: net.IPv4bcast, Port: 68}
-	
-	this.inbound, err = net.ListenUDP("udp4", &inboundAddress)
+
+	connection, err := net.ListenPacket("udp4", inboundAddress.String())
+	//this.connection, err = net.ListenPacket("udp4", ":67")
 	if err != nil {
 		return err
 	}
-	defer this.inbound.Close()
-	
+	this.connection = ipv4.NewPacketConn(connection)
+	defer this.connection.Close()
+
+	if err := this.connection.SetControlMessage(ipv4.FlagInterface, true); err != nil {
+		return err
+	}
 
 	//Make Our Buffer (Max Buffer is 574) "I believe this 576 size comes from RFC 791" - Random Mailing list quote of the day.
 	buffer := make([]byte, 576)
@@ -55,9 +55,10 @@ func (this *Server) ListenAndServe() error {
 		}
 
 		//Set Read Deadline
-		this.inbound.SetReadDeadline(time.Now().Add(time.Second))
+		this.connection.SetReadDeadline(time.Now().Add(time.Second))
 		// Read Packet
-		n, source, err := this.inbound.ReadFrom(buffer)
+		n, control_message, source, err := this.connection.ReadFrom(buffer)
+
 		if err != nil {
 
 			switch v := err.(type) {
@@ -100,14 +101,14 @@ func (this *Server) ListenAndServe() error {
 			}
 		}
 
-		log.Printf("Debug: Packet Received:%v\n", packet)
-		log.Printf("Debug: Packet Received ID:%v\n", packet.XId())
-		log.Printf("Debug: Packet Options:%v\n", packet.ParseOptions())
-		log.Printf("Debug: Packet Client IP : %v\n", packet.CIAddr().String())
-		log.Printf("Debug: Packet Your IP   : %v\n", packet.YIAddr().String())
-		log.Printf("Debug: Packet Server IP : %v\n", packet.SIAddr().String())
-		log.Printf("Debug: Packet Gateway IP: %v\n", packet.GIAddr().String())
-		log.Printf("Debug: Packet Client Mac: %v\n", packet.CHAddr().String())
+		//log.Printf("Debug: Packet Received:%v\n", packet)
+		//log.Printf("Debug: Packet Received ID:%v\n", packet.XId())
+		//log.Printf("Debug: Packet Options:%v\n", packet.ParseOptions())
+		//log.Printf("Debug: Packet Client IP : %v\n", packet.CIAddr().String())
+		//log.Printf("Debug: Packet Your IP   : %v\n", packet.YIAddr().String())
+		//log.Printf("Debug: Packet Server IP : %v\n", packet.SIAddr().String())
+		//log.Printf("Debug: Packet Gateway IP: %v\n", packet.GIAddr().String())
+		//log.Printf("Debug: Packet Client Mac: %v\n", packet.CHAddr().String())
 
 		//We need to stop butting in with other servers.
 		if packet.SIAddr().Equal(net.IPv4(0, 0, 0, 0)) || packet.SIAddr().Equal(net.IP{}) || packet.SIAddr().Equal(this.Configuration.IP) {
@@ -118,35 +119,22 @@ func (this *Server) ListenAndServe() error {
 				return err
 			}
 
-			log.Printf("Debug: Packet Returned:%v\n", returnPacket)
-			log.Printf("Debug: Packet Returned ID:%v\n", returnPacket.XId())
-			log.Printf("Debug: Packet Options:%v\n", returnPacket.ParseOptions())
-			log.Printf("Debug: Packet Client IP : %v\n", returnPacket.CIAddr().String())
-			log.Printf("Debug: Packet Your IP   : %v\n", returnPacket.YIAddr().String())
-			log.Printf("Debug: Packet Server IP : %v\n", returnPacket.SIAddr().String())
-			log.Printf("Debug: Packet Gateway IP: %v\n", returnPacket.GIAddr().String())
-			log.Printf("Debug: Packet Client Mac: %v\n", returnPacket.CHAddr().String())
-
 			if len(packet) > 0 {
-				this.inbound.Close()
+				//log.Printf("Debug: Packet Returned:%v\n", returnPacket)
+				//log.Printf("Debug: Packet Returned ID:%v\n", returnPacket.XId())
+				//log.Printf("Debug: Packet Options:%v\n", returnPacket.ParseOptions())
+				//log.Printf("Debug: Packet Client IP : %v\n", returnPacket.CIAddr().String())
+				//log.Printf("Debug: Packet Your IP   : %v\n", returnPacket.YIAddr().String())
+				//log.Printf("Debug: Packet Server IP : %v\n", returnPacket.SIAddr().String())
+				//log.Printf("Debug: Packet Gateway IP: %v\n", returnPacket.GIAddr().String())
+				//log.Printf("Debug: Packet Client Mac: %v\n", returnPacket.CHAddr().String())
 
-				this.outbound, err = net.DialUDP("udp4", &outboundAddressFrom, &outboundAddressTo)
-				if err != nil {
-					return err
-				}
-
-				_, err := this.outbound.Write(returnPacket)
-				this.outbound.Close()
-				
+				outboundAddress := net.UDPAddr{IP: net.IPv4bcast, Port: 68}
+				_, err = this.connection.WriteTo(returnPacket, control_message, &outboundAddress)
 				if err != nil {
 					log.Println("Error Writing:" + err.Error())
 					return err
 				}
-				
-				this.inbound, err = net.ListenUDP("udp4", &inboundAddress)
-				if err != nil {
-					return err
-				}				
 			}
 		}
 
@@ -175,8 +163,6 @@ func (this *Server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
 		offerPacket.SetYIAddr(lease.IP)
 
 		//Sort out the packet options
-		log.Printf("%v\n", packetOptions[dhcp4.OptionParameterRequestList])
-
 		offerPacket.PadToMinSize()
 
 		lease.Reserve()

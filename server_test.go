@@ -64,14 +64,6 @@ func ExampleServer() {
 }
 
 /*
- * Dummy Test This allows us to run a server Independantly
- */
-func TestDummyTest(test *testing.T){
-	myServer := GetTestServerInstance()
-	myServer.ListenAndServe()
-}
-
-/*
  * Test Server Used In Tests.
  */
 func GetTestServerInstance() Server {
@@ -160,7 +152,6 @@ func TestConfigurationJSONMarshalling(test *testing.T) {
  * The device requests 100.123.123.123 on Home Wifi which is out of range...
  */
 func TestDiscoverOutOfRangeLease(test *testing.T) {
-	test.SkipNow()
 	myServer := GetTestServerInstance()
 
 	var wg sync.WaitGroup
@@ -266,7 +257,6 @@ func TestDiscoverOutOfRangeLease(test *testing.T) {
  * Try Renewing A Lease From A Different Network.
  */
 func TestRequestOutOfRangeLease(test *testing.T) {
-	test.SkipNow()
 	myServer := GetTestServerInstance()
 
 	var wg sync.WaitGroup
@@ -351,11 +341,9 @@ func TestRequestOutOfRangeLease(test *testing.T) {
 }
 
 /*
- * 
+ *
  */
 func TestConsumeLeases(test *testing.T) {
-	test.SkipNow()
-	
 	//Setup the Server
 	myServer := GetTestServerInstance()
 
