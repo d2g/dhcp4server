@@ -41,9 +41,10 @@ func (this *Server) ListenAndServe() error {
 	this.connection = ipv4.NewPacketConn(connection)
 	defer this.connection.Close()
 
-	if err := this.connection.SetControlMessage(ipv4.FlagInterface, true); err != nil {
-		return err
-	}
+	//We Currently Don't Use this Feature Which is the only bit that is Linux Only.
+	//if err := this.connection.SetControlMessage(ipv4.FlagInterface, true); err != nil {
+	//	return err
+	//}
 
 	//Make Our Buffer (Max Buffer is 574) "I believe this 576 size comes from RFC 791" - Random Mailing list quote of the day.
 	buffer := make([]byte, 576)
@@ -165,7 +166,7 @@ func (this *Server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
 		//Sort out the packet options
 		offerPacket.PadToMinSize()
 
-		lease.Reserve()
+		lease.Status = leasepool.Reserved
 		lease.MACAddress = packet.CHAddr()
 
 		if packetOptions[dhcp4.OptionHostName] != nil && string(packetOptions[dhcp4.OptionHostName]) != "" {
@@ -204,7 +205,7 @@ func (this *Server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
 
 			return declinePacket, nil
 		} else {
-			lease.Active()
+			lease.Status = leasepool.Active
 			lease.MACAddress = packet.CHAddr()
 
 			lease.Expiry = time.Now().Add(this.Configuration.LeaseDuration)
