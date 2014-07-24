@@ -1,4 +1,4 @@
 dhcp4server
 ===========
 
-DHCP Server
+DHCP Server (Currently Linux Only)
