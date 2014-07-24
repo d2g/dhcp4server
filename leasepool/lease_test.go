@@ -11,7 +11,7 @@ import (
  * The Leases are Marshalled and Unmarshalled for storage.
  * I JSON Marshal these for gvklite
  */
-func Test_Marshaling(test *testing.T) {
+func TestMarshaling(test *testing.T) {
 	var err error
 
 	startLease := Lease{}

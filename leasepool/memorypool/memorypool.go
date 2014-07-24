@@ -1,178 +1,150 @@
 package memorypool
 
 import (
+	"bytes"
 	"errors"
 	"github.com/d2g/dhcp4server/leasepool"
 	"net"
-	"time"
+	"sync"
 )
 
 type MemoryPool struct {
-	Pool      []leasepool.Lease
-	NextLease int
+	pool     []leasepool.Lease
+	poolLock sync.Mutex
 }
 
-func (this *MemoryPool) AddToPool(ips []net.IP) error {
-	if this.Pool == nil {
-		this.Pool = make([]leasepool.Lease, 0)
+//Add A Lease To The Pool
+func (t *MemoryPool) AddLease(newLease leasepool.Lease) error {
+	t.poolLock.Lock()
+	defer t.poolLock.Unlock()
+
+	if t.pool == nil {
+		t.pool = make([]leasepool.Lease, 0)
 	}
 
-	for _, ip := range ips {
-
-		existing := false
-		for i, _ := range this.Pool {
-			if this.Pool[i].IP.Equal(ip) {
-				existing = true
-				break
-			}
-		}
-
-		if !existing {
-			this.Pool = append(this.Pool, leasepool.Lease{IP: ip})
+	for i := range t.pool {
+		if t.pool[i].IP.Equal(newLease.IP) {
+			//Lease Already Exists In Pool
+			return errors.New("Error: Lease IP \"" + newLease.IP.String() + "\" alreay exists in Pool")
 		}
 	}
 
+	t.pool = append([]leasepool.Lease{newLease}, t.pool...)
 	return nil
 }
 
-func (this *MemoryPool) PurgePool() error {
-	for i := (len(this.Pool) - 1); i <= 0; i-- {
+//Remove a Lease From The Pool
+func (t *MemoryPool) RemoveLease(leaseIP net.IP) error {
+	t.poolLock.Lock()
+	defer t.poolLock.Unlock()
 
-		if i == 0 {
-			this.Pool = []leasepool.Lease{}
-		} else {
-			this.Pool = this.Pool[0:i]
+	for i := range t.pool {
+		if t.pool[i].IP.Equal(leaseIP) {
+
+			//Move the Last Element to This Position.
+			t.pool[i] = t.pool[len(t.pool)-1]
+
+			//Shortern the Pool By One.
+			t.pool = t.pool[0:(len(t.pool) - 1)]
+			return nil
 		}
 	}
 
+	return errors.New("Error: Lease IP \"" + leaseIP.String() + "\" Is Not In The Pool")
+}
+
+//Remove All Leases from the Pool (Required for Persistant LeaseManagers)
+func (t *MemoryPool) PurgeLeases() error {
+	t.poolLock.Lock()
+	defer t.poolLock.Unlock()
+
+	t.pool = nil
+	t.pool = make([]leasepool.Lease, 0)
 	return nil
-}
-
-func (this *MemoryPool) GetLease(hardwareAddress net.HardwareAddr) (leasepool.Lease, error) {
-	nextDHCPLease := leasepool.Lease{}
-	nextDHCPLease.MACAddress = hardwareAddress
-	this.cleanupLeases(&nextDHCPLease)
-
-	if len(this.Pool) == 0 {
-		return nextDHCPLease, errors.New("Lease Pool Is Empty")
-	}
-
-	for i := 0; i < len(this.Pool); i++ {
-		if this.Pool[this.NextLease+i].Status != leasepool.Active {
-			//Lease is free lets use it.
-			nextDHCPLease = this.Pool[this.NextLease+i]
-			this.NextLease++
-
-			if this.NextLease >= len(this.Pool) {
-				this.NextLease = 0
-			}
-			return nextDHCPLease, nil
-		}
-	}
-
-	return nextDHCPLease, errors.New("Lease Pool is Depleted")
-}
-
-func (this *MemoryPool) ReserveLease(reserveLease *leasepool.Lease) (bool, error) {
-	this.cleanupLeases(reserveLease)
-
-	//Reserve the Pool
-	for i := range this.Pool {
-		if this.Pool[i].IP.Equal(reserveLease.IP) {
-			if this.Pool[i].Status != leasepool.Active {
-				//The Lease Is Not Active
-				this.Pool[i].Status = leasepool.Reserved
-				this.Pool[i].MACAddress = reserveLease.MACAddress
-
-				return true, nil
-
-			} else {
-				//The Lease is Active
-				if this.Pool[i].MACAddress.String() == reserveLease.MACAddress.String() {
-					//It's ok it's My Lease
-					return true, nil
-				} else {
-					//Ok it's not mine..
-					return false, nil
-				}
-			}
-		}
-	}
-	return false, nil
-	//return false, errors.New("Reserve Lease, IP is Not In Pool")
-}
-
-func (this *MemoryPool) AcceptLease(acceptLease *leasepool.Lease) (bool, error) {
-	this.cleanupLeases(acceptLease)
-
-	for i := range this.Pool {
-		if this.Pool[i].IP.Equal(acceptLease.IP) {
-			//This is the Lease We Requested.
-			if this.Pool[i].MACAddress.String() == acceptLease.MACAddress.String() {
-				//It's Our Lease We can Do What we want with it
-				//Lets Renew it Quick.
-				this.Pool[i].Hostname = acceptLease.Hostname
-				this.Pool[i].Status = leasepool.Active
-				this.Pool[i].Expiry = (time.Now()).Add(time.Hour * time.Duration(24))
-
-				//We Need to let the client know we've updated the lease also.
-				acceptLease.Expiry = this.Pool[i].Expiry
-
-				return true, nil
-
-			} else {
-				//Hmm not our lease.
-				if this.Pool[i].Status != leasepool.Active {
-					//Nobody's Got it So You can have it quick.
-					this.Pool[i].MACAddress = acceptLease.MACAddress
-					this.Pool[i].Hostname = acceptLease.Hostname
-					this.Pool[i].Status = leasepool.Active
-					this.Pool[i].Expiry = (time.Now()).Add(time.Hour * time.Duration(24))
-
-					//We Need to let the client know we've updated the lease also.
-					acceptLease.Expiry = this.Pool[i].Expiry
-
-					return true, nil
-
-				} else {
-					//It's not our lease and it's active elsewhere.
-					//Then we can't use it.
-					return false, nil
-				}
-
-			}
-
-		}
-	}
-	return false, nil
-	//return false, errors.New("Accept Lease, IP is Not In Pool")
 }
 
 /*
- * If we are requesting a Lease but already have an Lease on a different IP then
- * we want to clear that old Lease.
+ * Get the Lease
+ * -Found
+ * -Copy Of the Lease
+ * -Any Error
  */
-func (this *MemoryPool) cleanupLeases(requestedLease *leasepool.Lease) {
+func (t *MemoryPool) GetLease(leaseIP net.IP) (bool, leasepool.Lease, error) {
+	t.poolLock.Lock()
+	defer t.poolLock.Unlock()
 
-	for i := range this.Pool {
-
-		//Only Ever Bother to Clean Up Active or Reserved Leases
-		if this.Pool[i].Status == leasepool.Active || this.Pool[i].Status == leasepool.Reserved {
-
-			//Expired Leases
-			if this.Pool[i].Expiry.Before(time.Now()) {
-				this.Pool[i].Status = leasepool.Free
-
-				//This Lease is now Free so move on.
-				continue
-			}
-
-			//If the MAC is used by another Lease Release that Lease.
-			if this.Pool[i].MACAddress.String() == requestedLease.MACAddress.String() && !this.Pool[i].IP.Equal(requestedLease.IP) {
-				//The MAC is assigned to this IP but it's not requesting it.
-				//So lets Clear it.
-				this.Pool[i].Status = leasepool.Free
-			}
+	for i := range t.pool {
+		if t.pool[i].IP.Equal(leaseIP) {
+			return true, t.pool[i], nil
 		}
 	}
+	return false, leasepool.Lease{}, nil
+}
+
+//Get the lease already in use by that hardware address.
+func (t *MemoryPool) GetLeaseForHardwareAddress(macAddress net.HardwareAddr) (bool, leasepool.Lease, error) {
+	t.poolLock.Lock()
+	defer t.poolLock.Unlock()
+
+	for i := range t.pool {
+		if bytes.Equal(t.pool[i].MACAddress, macAddress) {
+			return true, t.pool[i], nil
+		}
+	}
+	return false, leasepool.Lease{}, nil
+}
+
+/*
+ * -Lease Available
+ * -Lease
+ * -Error
+ */
+func (t *MemoryPool) GetNextFreeLease() (bool, leasepool.Lease, error) {
+	t.poolLock.Lock()
+	defer t.poolLock.Unlock()
+
+	//Loop Through the elements backwards.
+	for i := (len(t.pool) - 1); i > 0; i-- {
+		//If the Lease Is Free
+		if t.pool[i].Status == leasepool.Free {
+			//Take the Element
+			iLease := t.pool[i]
+			//Shrink the Pool By 1
+			t.pool = t.pool[:(len(t.pool) - 1)]
+			//Place the Lease At the Begining (This saves us having some sort of counter...)
+			t.pool = append([]leasepool.Lease{iLease}, t.pool...)
+			return true, iLease, nil
+		}
+	}
+	return false, leasepool.Lease{}, nil
+}
+
+/*
+ * Return All Leases
+ */
+func (t *MemoryPool) GetLeases() ([]leasepool.Lease, error) {
+	return t.pool, nil
+}
+
+/*
+ * Update Lease
+ * - Has Updated
+ * - Error
+ */
+func (t *MemoryPool) UpdateLease(lease leasepool.Lease) (bool, error) {
+	t.poolLock.Lock()
+	defer t.poolLock.Unlock()
+
+	for i := range t.pool {
+		if t.pool[i].IP.Equal(lease.IP) {
+
+			t.pool[i].MACAddress = lease.MACAddress
+			t.pool[i].Hostname = lease.Hostname
+			t.pool[i].Expiry = lease.Expiry
+			t.pool[i].Status = lease.Status
+
+			return true, nil
+		}
+	}
+	return false, nil
 }
