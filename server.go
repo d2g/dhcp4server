@@ -34,8 +34,8 @@ func (this *Server) ListenAndServe() error {
 	inboundAddress := net.UDPAddr{IP: net.IPv4(0, 0, 0, 0), Port: 67}
 
 	connection, err := net.ListenPacket("udp4", inboundAddress.String())
-	//this.connection, err = net.ListenPacket("udp4", ":67")
 	if err != nil {
+		log.Printf("Debug: Error Returned From ListenPacket On \"%s\" Because of \"%s\"\n", inboundAddress.String(), err.Error())
 		return err
 	}
 	this.connection = ipv4.NewPacketConn(connection)
@@ -48,6 +48,8 @@ func (this *Server) ListenAndServe() error {
 
 	//Make Our Buffer (Max Buffer is 574) "I believe this 576 size comes from RFC 791" - Random Mailing list quote of the day.
 	buffer := make([]byte, 576)
+
+	log.Println("Trace: DHCP Server Listening.")
 
 	for {
 	ListenForDHCPPackets:
@@ -77,7 +79,7 @@ func (this *Server) ListenAndServe() error {
 				}
 			}
 
-			log.Println("Error:" + err.Error())
+			log.Println("Debug: Unexpect Error from Connection Read From:" + err.Error())
 			return err
 		}
 
@@ -86,7 +88,7 @@ func (this *Server) ListenAndServe() error {
 		//However, they can have i.e. if you're the client & server :S.
 		for _, ipToIgnore := range this.Configuration.IgnoreIPs {
 			if ipToIgnore.Equal(source.(*net.UDPAddr).IP) {
-				log.Println("Ignoring DHCP Request From IP:" + ipToIgnore.String())
+				log.Println("Debug: Ignoring DHCP Request From IP:" + ipToIgnore.String())
 				continue
 			}
 		}
@@ -97,43 +99,41 @@ func (this *Server) ListenAndServe() error {
 		//Usefull for ignoring a range of hardware addresses
 		for _, hardwareAddressToIgnore := range this.Configuration.IgnoreHardwareAddress {
 			if bytes.Equal(hardwareAddressToIgnore, packet.CHAddr()) {
-				log.Println("Ignoring DHCP Request From Hardware Address:" + hardwareAddressToIgnore.String())
+				log.Println("Debug: Ignoring DHCP Request From Hardware Address:" + hardwareAddressToIgnore.String())
 				continue
 			}
 		}
 
-		//log.Printf("Debug: Packet Received:%v\n", packet)
-		//log.Printf("Debug: Packet Received ID:%v\n", packet.XId())
-		//log.Printf("Debug: Packet Options:%v\n", packet.ParseOptions())
-		//log.Printf("Debug: Packet Client IP : %v\n", packet.CIAddr().String())
-		//log.Printf("Debug: Packet Your IP   : %v\n", packet.YIAddr().String())
-		//log.Printf("Debug: Packet Server IP : %v\n", packet.SIAddr().String())
-		//log.Printf("Debug: Packet Gateway IP: %v\n", packet.GIAddr().String())
-		//log.Printf("Debug: Packet Client Mac: %v\n", packet.CHAddr().String())
+		log.Printf("Trace: Packet Received ID:%v\n", packet.XId())
+		log.Printf("Trace: Packet Options:%v\n", packet.ParseOptions())
+		log.Printf("Trace: Packet Client IP : %v\n", packet.CIAddr().String())
+		log.Printf("Trace: Packet Your IP   : %v\n", packet.YIAddr().String())
+		log.Printf("Trace: Packet Server IP : %v\n", packet.SIAddr().String())
+		log.Printf("Trace: Packet Gateway IP: %v\n", packet.GIAddr().String())
+		log.Printf("Trace: Packet Client Mac: %v\n", packet.CHAddr().String())
 
 		//We need to stop butting in with other servers.
 		if packet.SIAddr().Equal(net.IPv4(0, 0, 0, 0)) || packet.SIAddr().Equal(net.IP{}) || packet.SIAddr().Equal(this.Configuration.IP) {
 
 			returnPacket, err := this.ServeDHCP(packet)
 			if err != nil {
-				log.Println("Error Serving DHCP:" + err.Error())
+				log.Println("Debug: Error Serving DHCP:" + err.Error())
 				return err
 			}
 
 			if len(packet) > 0 {
-				//log.Printf("Debug: Packet Returned:%v\n", returnPacket)
-				//log.Printf("Debug: Packet Returned ID:%v\n", returnPacket.XId())
-				//log.Printf("Debug: Packet Options:%v\n", returnPacket.ParseOptions())
-				//log.Printf("Debug: Packet Client IP : %v\n", returnPacket.CIAddr().String())
-				//log.Printf("Debug: Packet Your IP   : %v\n", returnPacket.YIAddr().String())
-				//log.Printf("Debug: Packet Server IP : %v\n", returnPacket.SIAddr().String())
-				//log.Printf("Debug: Packet Gateway IP: %v\n", returnPacket.GIAddr().String())
-				//log.Printf("Debug: Packet Client Mac: %v\n", returnPacket.CHAddr().String())
+				log.Printf("Trace: Packet Returned ID:%v\n", returnPacket.XId())
+				log.Printf("Trace: Packet Options:%v\n", returnPacket.ParseOptions())
+				log.Printf("Trace: Packet Client IP : %v\n", returnPacket.CIAddr().String())
+				log.Printf("Trace: Packet Your IP   : %v\n", returnPacket.YIAddr().String())
+				log.Printf("Trace: Packet Server IP : %v\n", returnPacket.SIAddr().String())
+				log.Printf("Trace: Packet Gateway IP: %v\n", returnPacket.GIAddr().String())
+				log.Printf("Trace: Packet Client Mac: %v\n", returnPacket.CHAddr().String())
 
 				outboundAddress := net.UDPAddr{IP: net.IPv4bcast, Port: 68}
 				_, err = this.connection.WriteTo(returnPacket, control_message, &outboundAddress)
 				if err != nil {
-					log.Println("Error Writing:" + err.Error())
+					log.Println("Debug: Error Writing:" + err.Error())
 					return err
 				}
 			}
@@ -168,6 +168,11 @@ func (this *Server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
 
 		lease.Status = leasepool.Reserved
 		lease.MACAddress = packet.CHAddr()
+
+		//If the lease expires within the next 5 Mins increase the lease expiary (Giving the Client 5 mins to complete)
+		if lease.Expiry.Before(time.Now().Add(time.Minute * 5)) {
+			lease.Expiry = time.Now().Add(time.Minute * 5)
+		}
 
 		if packetOptions[dhcp4.OptionHostName] != nil && string(packetOptions[dhcp4.OptionHostName]) != "" {
 			lease.Hostname = string(packetOptions[dhcp4.OptionHostName])
@@ -393,4 +398,35 @@ func (t *Server) GetLease(packet dhcp4.Packet) (found bool, lease leasepool.Leas
  */
 func (t *Server) Shutdown() {
 	t.shutdown = true
+}
+
+/*
+ * Garbage Collection
+ * Run Garbage Collection On Your Leases To Free Expired Leases.
+ */
+func (t *Server) GC() error {
+	leases, err := t.LeasePool.GetLeases()
+	if err != nil {
+		return err
+	}
+
+	for i := range leases {
+		if leases[i].Status != leasepool.Free {
+			//Lease Is Not Free
+
+			if time.Now().After(leases[i].Expiry) {
+				//Lease has expired.
+				leases[i].Status = leasepool.Free
+				updated, err := t.LeasePool.UpdateLease(leases[i])
+				if err != nil {
+					log.Println("Warning: Error trying to Free Lease %s \"%v\"", leases[i].IP.To4().String(), err)
+				}
+				if !updated {
+					log.Println("Warning: Unable to Free Lease %s", leases[i].IP.To4().String())
+				}
+				continue
+			}
+		}
+	}
+	return nil
 }
