@@ -4,16 +4,17 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
-	"github.com/d2g/dhcp4"
-	"github.com/d2g/dhcp4client"
-	"github.com/d2g/dhcp4server/leasepool"
-	"github.com/d2g/dhcp4server/leasepool/memorypool"
-	"github.com/d2g/hardwareaddr"
 	"log"
 	"net"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/d2g/dhcp4"
+	"github.com/d2g/dhcp4client"
+	"github.com/d2g/dhcp4server/leasepool"
+	"github.com/d2g/dhcp4server/leasepool/memorypool"
+	"github.com/d2g/hardwareaddr"
 )
 
 /*

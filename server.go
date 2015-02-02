@@ -2,13 +2,14 @@ package dhcp4server
 
 import (
 	"bytes"
-	"code.google.com/p/go.net/ipv4"
 	"errors"
-	"github.com/d2g/dhcp4"
-	"github.com/d2g/dhcp4server/leasepool"
 	"log"
 	"net"
 	"time"
+
+	"github.com/d2g/dhcp4"
+	"github.com/d2g/dhcp4server/leasepool"
+	"golang.org/x/net/ipv4"
 )
 
 /*
@@ -83,6 +84,12 @@ func (this *Server) ListenAndServe() error {
 			return err
 		}
 
+		//We seem to have an issue with undersized packets?
+		if n < 240 {
+			log.Printf("Error: Invalid Packet Size \"%d\" Received:%v\n", n, buffer[:n])
+			continue
+		}
+
 		//We should ignore some requests
 		//It shouldn't be possible to ignore IP's because they shouldn't have them as we're the DHCP server.
 		//However, they can have i.e. if you're the client & server :S.
@@ -121,7 +128,7 @@ func (this *Server) ListenAndServe() error {
 				return err
 			}
 
-			if len(packet) > 0 {
+			if len(returnPacket) > 0 {
 				log.Printf("Trace: Packet Returned ID:%v\n", returnPacket.XId())
 				log.Printf("Trace: Packet Options:%v\n", returnPacket.ParseOptions())
 				log.Printf("Trace: Packet Client IP : %v\n", returnPacket.CIAddr().String())
@@ -156,7 +163,7 @@ func (this *Server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
 		}
 
 		if !found {
-			log.Println("It Looks Like Our Leases Are Depleted...")
+			log.Println("Warning: It Looks Like Our Leases Are Depleted...")
 			return dhcp4.Packet{}, nil
 		}
 
@@ -198,7 +205,7 @@ func (this *Server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
 		}
 
 		if !found {
-			log.Println("It Looks Like Our Leases Are Depleted...")
+			log.Println("Warning: It Looks Like Our Leases Are Depleted...")
 			return dhcp4.Packet{}, nil
 		}
 
@@ -244,14 +251,14 @@ func (this *Server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
 		}
 	case dhcp4.Decline:
 		//Decline from the client:
-		log.Printf("Decline Message:%v\n", packet)
+		log.Printf("Debug: Decline Message:%v\n", packet)
 
 	case dhcp4.Release:
 		//Decline from the client:
-		log.Printf("Release Message:%v\n", packet)
+		log.Printf("Debug: Release Message:%v\n", packet)
 
 	default:
-		log.Printf("Unexpected Packet Type:%v\n", dhcp4.MessageType(packetOptions[dhcp4.OptionDHCPMessageType][0]))
+		log.Printf("Debug: Unexpected Packet Type:%v\n", dhcp4.MessageType(packetOptions[dhcp4.OptionDHCPMessageType][0]))
 	}
 
 	return dhcp4.Packet{}, nil
@@ -419,10 +426,10 @@ func (t *Server) GC() error {
 				leases[i].Status = leasepool.Free
 				updated, err := t.LeasePool.UpdateLease(leases[i])
 				if err != nil {
-					log.Println("Warning: Error trying to Free Lease %s \"%v\"", leases[i].IP.To4().String(), err)
+					log.Printf("Warning: Error trying to Free Lease %s \"%v\"\n", leases[i].IP.To4().String(), err)
 				}
 				if !updated {
-					log.Println("Warning: Unable to Free Lease %s", leases[i].IP.To4().String())
+					log.Printf("Warning: Unable to Free Lease %s\n", leases[i].IP.To4().String())
 				}
 				continue
 			}
