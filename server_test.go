@@ -1,9 +1,8 @@
-package dhcp4server
+package dhcp4server_test
 
 import (
 	"bytes"
 	"encoding/binary"
-	"encoding/json"
 	"log"
 	"net"
 	"sync"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/d2g/dhcp4"
 	"github.com/d2g/dhcp4client"
+	"github.com/d2g/dhcp4server"
 	"github.com/d2g/dhcp4server/leasepool"
 	"github.com/d2g/dhcp4server/leasepool/memorypool"
 	"github.com/d2g/hardwareaddr"
@@ -21,23 +21,6 @@ import (
  * Example Server :D
  */
 func ExampleServer() {
-	//Configure the Server:
-	myConfiguration := Configuration{}
-
-	//You Should replace this with the IP of the Machine you are running the application on.
-	myConfiguration.IP = net.IPv4(192, 168, 1, 201)
-
-	//Replace this section with the subnet
-	myConfiguration.SubnetMask = net.IPv4(255, 255, 255, 0)
-
-	//Default Gateway
-	myConfiguration.DefaultGateway = net.IPv4(192, 168, 1, 201)
-
-	//Update these with your selected DNS Servers these belong to OpenDNS
-	myConfiguration.DNSServers = []net.IP{net.IPv4(208, 67, 222, 222), net.IPv4(208, 67, 220, 220)}
-
-	//Our Leases Are valid for 24 hours..
-	myConfiguration.LeaseDuration = 24 * time.Hour
 
 	//Create a Lease Pool We're going to use a memory pool
 	//Remember the memory is cleared on restart so you will reissue the same IP Addresses.
@@ -52,98 +35,19 @@ func ExampleServer() {
 		}
 	}
 
-	//Create The Server
-	myServer := Server{}
-	myServer.Configuration = &myConfiguration
-	myServer.LeasePool = &myMemoryLeasePool
+	tServer, err := dhcp4server.New(
+		net.IPv4(192, 168, 1, 201),
+		&myMemoryLeasePool,
+	)
+	if err != nil {
+		log.Fatalln("Error Configuring Server:" + err.Error())
+	}
 
 	//Start the Server...
-	err := myServer.ListenAndServe()
+	err = tServer.ListenAndServe()
 	if err != nil {
 		log.Fatalln("Error Starting Server:" + err.Error())
 	}
-}
-
-/*
- * Test Server Used In Tests.
- */
-func GetTestServerInstance() Server {
-	//Configure the Server:
-	myConfiguration := Configuration{}
-
-	//You Should replace this with the IP of the Machine you are running the application on.
-	myConfiguration.IP = net.IPv4(192, 168, 1, 201)
-
-	//Replace this section with the subnet
-	myConfiguration.SubnetMask = net.IPv4(255, 255, 255, 0)
-
-	//Default Gateway
-	myConfiguration.DefaultGateway = net.IPv4(192, 168, 1, 201)
-
-	//Update these with your selected DNS Servers these belong to OpenDNS
-	myConfiguration.DNSServers = []net.IP{net.IPv4(208, 67, 222, 222), net.IPv4(208, 67, 220, 220)}
-
-	//Our Leases Are valid for 24 hours..
-	myConfiguration.LeaseDuration = 24 * time.Hour
-
-	//Create a Lease Pool We're going to use a memory pool
-	//Remember the memory is cleared on restart so you will reissue the same IP Addresses.
-	myMemoryLeasePool := memorypool.MemoryPool{}
-
-	//Lets add a list of IPs to the pool these will be served to the clients so make sure they work for you.
-	// So Create Array of IPs 192.168.1.1 to 192.168.1.30
-	for i := 0; i < 30; i++ {
-		err := myMemoryLeasePool.AddLease(leasepool.Lease{IP: dhcp4.IPAdd(net.IPv4(192, 168, 1, 1), i)})
-		if err != nil {
-			log.Fatalln("Error Adding IP to pool:" + err.Error())
-		}
-	}
-
-	//Create The Server
-	myServer := Server{}
-	myServer.Configuration = &myConfiguration
-	myServer.LeasePool = &myMemoryLeasePool
-
-	return myServer
-}
-
-/*
- * Test Configuration Marshalling
- */
-func TestConfigurationJSONMarshalling(test *testing.T) {
-	var err error
-
-	startConfiguration := Configuration{}
-	startConfiguration.IP = net.IPv4(192, 168, 0, 1)
-	startConfiguration.DefaultGateway = net.IPv4(192, 168, 0, 254)
-	startConfiguration.DNSServers = []net.IP{net.IPv4(208, 67, 222, 222), net.IPv4(208, 67, 220, 220)}
-	startConfiguration.SubnetMask = net.IPv4(255, 255, 255, 0)
-	startConfiguration.LeaseDuration = 24 * time.Hour
-	startConfiguration.IgnoreIPs = []net.IP{net.IPv4(192, 168, 0, 100)}
-
-	startConfiguration.IgnoreHardwareAddress = make([]net.HardwareAddr, 0)
-	exampleMac, err := net.ParseMAC("00:00:00:00:00:00")
-	if err != nil {
-		test.Error("Error Parsing Mac Address:" + err.Error())
-	}
-	startConfiguration.IgnoreHardwareAddress = append(startConfiguration.IgnoreHardwareAddress, exampleMac)
-
-	test.Logf("Configuration Object:%v\n", startConfiguration)
-
-	bytestartConfiguration, err := json.Marshal(startConfiguration)
-	if err != nil {
-		test.Error("Error Marshaling to JSON:" + err.Error())
-	}
-
-	test.Log("As JSON:" + string(bytestartConfiguration))
-
-	endConfiguration := Configuration{}
-	err = json.Unmarshal(bytestartConfiguration, &endConfiguration)
-	if err != nil {
-		test.Error("Error Unmarshaling to JSON:" + err.Error())
-	}
-
-	test.Logf("Configuration Object:%v\n", endConfiguration)
 }
 
 /*
@@ -153,7 +57,14 @@ func TestConfigurationJSONMarshalling(test *testing.T) {
  * The device requests 100.123.123.123 on Home Wifi which is out of range...
  */
 func TestDiscoverOutOfRangeLease(test *testing.T) {
-	myServer := GetTestServerInstance()
+	//Setup the Server
+	myServer, err := dhcp4server.New(
+		net.IPv4(192, 168, 1, 201),
+		getTestLeasePool(),
+	)
+	if err != nil {
+		test.Error("Error: Can't Configure Server " + err.Error())
+	}
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -258,7 +169,14 @@ func TestDiscoverOutOfRangeLease(test *testing.T) {
  * Try Renewing A Lease From A Different Network.
  */
 func TestRequestOutOfRangeLease(test *testing.T) {
-	myServer := GetTestServerInstance()
+	//Setup the Server
+	myServer, err := dhcp4server.New(
+		net.IPv4(192, 168, 1, 201),
+		getTestLeasePool(),
+	)
+	if err != nil {
+		test.Error("Error: Can't Configure Server " + err.Error())
+	}
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -346,7 +264,13 @@ func TestRequestOutOfRangeLease(test *testing.T) {
  */
 func TestConsumeLeases(test *testing.T) {
 	//Setup the Server
-	myServer := GetTestServerInstance()
+	myServer, err := dhcp4server.New(
+		net.IPv4(192, 168, 1, 201),
+		getTestLeasePool(),
+	)
+	if err != nil {
+		test.Error("Error: Can't Configure Server " + err.Error())
+	}
 
 	//Setup A Client
 	// Although We Won't send the packets over the network we'll use the client to create the requests.
@@ -406,12 +330,26 @@ func TestConsumeLeases(test *testing.T) {
  * Benchmark the ServeDHCP Function
  */
 func BenchmarkServeDHCP(test *testing.B) {
-	//Setup the Server
-	myServer := GetTestServerInstance()
+	//Create a Lease Pool We're going to use a memory pool
+	//Remember the memory is cleared on restart so you will reissue the same IP Addresses.
+	myMemoryLeasePool := memorypool.MemoryPool{}
 
-	//Load the additional Leases We'll need
-	for i := 30; i < test.N; i++ {
-		myServer.LeasePool.AddLease(leasepool.Lease{IP: dhcp4.IPAdd(net.IPv4(192, 168, 1, 1), i)})
+	//Lets add a list of IPs to the pool these will be served to the clients so make sure they work for you.
+	// So Create Array of IPs 192.168.1.1 to 192.168.1.30
+	for i := 0; i < test.N; i++ {
+		err := myMemoryLeasePool.AddLease(leasepool.Lease{IP: dhcp4.IPAdd(net.IPv4(192, 168, 1, 1), i)})
+		if err != nil {
+			log.Fatalln("Error Adding IP to pool:" + err.Error())
+		}
+	}
+
+	//Setup the Server
+	myServer, err := dhcp4server.New(
+		net.IPv4(192, 168, 1, 201),
+		&myMemoryLeasePool,
+	)
+	if err != nil {
+		test.Error("Error: Can't Configure Server " + err.Error())
 	}
 
 	//Setup A Client
@@ -452,4 +390,20 @@ func BenchmarkServeDHCP(test *testing.B) {
 
 		}
 	}
+}
+
+func getTestLeasePool() *memorypool.MemoryPool {
+	//Create a Lease Pool We're going to use a memory pool
+	//Remember the memory is cleared on restart so you will reissue the same IP Addresses.
+	myMemoryLeasePool := memorypool.MemoryPool{}
+
+	//Lets add a list of IPs to the pool these will be served to the clients so make sure they work for you.
+	// So Create Array of IPs 192.168.1.1 to 192.168.1.30
+	for i := 0; i < 30; i++ {
+		err := myMemoryLeasePool.AddLease(leasepool.Lease{IP: dhcp4.IPAdd(net.IPv4(192, 168, 1, 1), i)})
+		if err != nil {
+			log.Fatalln("Error Adding IP to pool:" + err.Error())
+		}
+	}
+	return &myMemoryLeasePool
 }

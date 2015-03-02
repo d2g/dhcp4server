@@ -9,27 +9,131 @@ import (
 
 	"github.com/d2g/dhcp4"
 	"github.com/d2g/dhcp4server/leasepool"
+
 	"golang.org/x/net/ipv4"
 )
+
+var ()
 
 /*
  * The DHCP Server Structure
  */
-type Server struct {
-	Configuration *Configuration      //Server Configuration
-	LeasePool     leasepool.LeasePool //Lease Pool Manager
+type server struct {
+	//Configuration Options
+	ip                    net.IP             //The IP Address We Tell Clients The Server Is On.
+	defaultGateway        net.IP             //The Default Gateway Address
+	dnsServers            []net.IP           //DNS Servers
+	subnetMask            net.IP             //ie. 255.255.255.0
+	leaseDuration         time.Duration      //Number of Seconds
+	ignoreIPs             []net.IP           //Slice of IP's that should be ignored by the Server.
+	ignoreHardwareAddress []net.HardwareAddr //Slice of Hardware Addresses we should ignore.
+
+	//LeasePool
+	leasePool leasepool.LeasePool //Lease Pool Manager
 
 	//Used to Gracefully Close the Server
 	shutdown bool
-
 	//Listeners & Response Connection.
 	connection *ipv4.PacketConn
+}
+
+// Create A New Server
+func New(ip net.IP, l leasepool.LeasePool, options ...func(*server) error) (*server, error) {
+	s := server{
+		ip:             ip,
+		defaultGateway: ip,
+		dnsServers:     []net.IP{net.IPv4(208, 67, 222, 222), net.IPv4(208, 67, 220, 220)}, //OPENDNS
+		subnetMask:     net.IPv4(255, 255, 255, 0),
+		leaseDuration:  24 * time.Hour,
+		leasePool:      l,
+	}
+
+	err := s.setOptions(options...)
+	if err != nil {
+		return &s, err
+	}
+
+	return &s, err
+}
+
+func (s *server) setOptions(options ...func(*server) error) error {
+	for _, opt := range options {
+		if err := opt(s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Set the Server IP
+func IP(i net.IP) func(*server) error {
+	return func(s *server) error {
+		s.ip = i
+		return nil
+	}
+	return nil
+}
+
+// Set the Default Gateway Address.
+func DefaultGateway(r net.IP) func(*server) error {
+	return func(s *server) error {
+		s.defaultGateway = r
+		return nil
+	}
+}
+
+// Set the DNS servers.
+func DNSServers(dnss []net.IP) func(*server) error {
+	return func(s *server) error {
+		s.dnsServers = dnss
+		return nil
+	}
+}
+
+// Set the Subnet Mask
+func SubnetMask(m net.IP) func(*server) error {
+	return func(s *server) error {
+		s.subnetMask = m
+		return nil
+	}
+}
+
+// Set Lease Duration
+func LeaseDuration(d time.Duration) func(*server) error {
+	return func(s *server) error {
+		s.leaseDuration = d
+		return nil
+	}
+}
+
+// Set Ignore IPs
+func IgnoreIPs(ips []net.IP) func(*server) error {
+	return func(s *server) error {
+		s.ignoreIPs = ips
+		return nil
+	}
+}
+
+// Set Ignore Hardware Addresses
+func IgnoreHardwareAddresses(h []net.HardwareAddr) func(*server) error {
+	return func(s *server) error {
+		s.ignoreHardwareAddress = h
+		return nil
+	}
+}
+
+// Set LeasePool
+func LeasePool(p leasepool.LeasePool) func(*server) error {
+	return func(s *server) error {
+		s.leasePool = p
+		return nil
+	}
 }
 
 /*
  * Start The DHCP Server
  */
-func (this *Server) ListenAndServe() error {
+func (s *server) ListenAndServe() error {
 	var err error
 
 	inboundAddress := net.UDPAddr{IP: net.IPv4(0, 0, 0, 0), Port: 67}
@@ -39,11 +143,11 @@ func (this *Server) ListenAndServe() error {
 		log.Printf("Debug: Error Returned From ListenPacket On \"%s\" Because of \"%s\"\n", inboundAddress.String(), err.Error())
 		return err
 	}
-	this.connection = ipv4.NewPacketConn(connection)
-	defer this.connection.Close()
+	s.connection = ipv4.NewPacketConn(connection)
+	defer s.connection.Close()
 
 	//We Currently Don't Use this Feature Which is the only bit that is Linux Only.
-	//if err := this.connection.SetControlMessage(ipv4.FlagInterface, true); err != nil {
+	//if err := s.connection.SetControlMessage(ipv4.FlagInterface, true); err != nil {
 	//	return err
 	//}
 
@@ -54,14 +158,14 @@ func (this *Server) ListenAndServe() error {
 
 	for {
 	ListenForDHCPPackets:
-		if this.shutdown {
+		if s.shutdown {
 			return nil
 		}
 
 		//Set Read Deadline
-		this.connection.SetReadDeadline(time.Now().Add(time.Second))
+		s.connection.SetReadDeadline(time.Now().Add(time.Second))
 		// Read Packet
-		n, control_message, source, err := this.connection.ReadFrom(buffer)
+		n, control_message, source, err := s.connection.ReadFrom(buffer)
 
 		if err != nil {
 
@@ -93,7 +197,7 @@ func (this *Server) ListenAndServe() error {
 		//We should ignore some requests
 		//It shouldn't be possible to ignore IP's because they shouldn't have them as we're the DHCP server.
 		//However, they can have i.e. if you're the client & server :S.
-		for _, ipToIgnore := range this.Configuration.IgnoreIPs {
+		for _, ipToIgnore := range s.ignoreIPs {
 			if ipToIgnore.Equal(source.(*net.UDPAddr).IP) {
 				log.Println("Debug: Ignoring DHCP Request From IP:" + ipToIgnore.String())
 				continue
@@ -104,7 +208,7 @@ func (this *Server) ListenAndServe() error {
 
 		//We can ignore hardware addresses.
 		//Usefull for ignoring a range of hardware addresses
-		for _, hardwareAddressToIgnore := range this.Configuration.IgnoreHardwareAddress {
+		for _, hardwareAddressToIgnore := range s.ignoreHardwareAddress {
 			if bytes.Equal(hardwareAddressToIgnore, packet.CHAddr()) {
 				log.Println("Debug: Ignoring DHCP Request From Hardware Address:" + hardwareAddressToIgnore.String())
 				continue
@@ -120,9 +224,9 @@ func (this *Server) ListenAndServe() error {
 		log.Printf("Trace: Packet Client Mac: %v\n", packet.CHAddr().String())
 
 		//We need to stop butting in with other servers.
-		if packet.SIAddr().Equal(net.IPv4(0, 0, 0, 0)) || packet.SIAddr().Equal(net.IP{}) || packet.SIAddr().Equal(this.Configuration.IP) {
+		if packet.SIAddr().Equal(net.IPv4(0, 0, 0, 0)) || packet.SIAddr().Equal(net.IP{}) || packet.SIAddr().Equal(s.ip) {
 
-			returnPacket, err := this.ServeDHCP(packet)
+			returnPacket, err := s.ServeDHCP(packet)
 			if err != nil {
 				log.Println("Debug: Error Serving DHCP:" + err.Error())
 				return err
@@ -138,7 +242,7 @@ func (this *Server) ListenAndServe() error {
 				log.Printf("Trace: Packet Client Mac: %v\n", returnPacket.CHAddr().String())
 
 				outboundAddress := net.UDPAddr{IP: net.IPv4bcast, Port: 68}
-				_, err = this.connection.WriteTo(returnPacket, control_message, &outboundAddress)
+				_, err = s.connection.WriteTo(returnPacket, control_message, &outboundAddress)
 				if err != nil {
 					log.Println("Debug: Error Writing:" + err.Error())
 					return err
@@ -149,7 +253,7 @@ func (this *Server) ListenAndServe() error {
 	}
 }
 
-func (this *Server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
+func (s *server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
 	packetOptions := packet.ParseOptions()
 
 	switch dhcp4.MessageType(packetOptions[dhcp4.OptionDHCPMessageType][0]) {
@@ -157,7 +261,7 @@ func (this *Server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
 
 		//Discover Received from client
 		//Lets get the lease we're going to send them
-		found, lease, err := this.GetLease(packet)
+		found, lease, err := s.GetLease(packet)
 		if err != nil {
 			return dhcp4.Packet{}, err
 		}
@@ -167,7 +271,7 @@ func (this *Server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
 			return dhcp4.Packet{}, nil
 		}
 
-		offerPacket := this.OfferPacket(packet)
+		offerPacket := s.OfferPacket(packet)
 		offerPacket.SetYIAddr(lease.IP)
 
 		//Sort out the packet options
@@ -185,7 +289,7 @@ func (this *Server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
 			lease.Hostname = string(packetOptions[dhcp4.OptionHostName])
 		}
 
-		updated, err := this.LeasePool.UpdateLease(lease)
+		updated, err := s.leasePool.UpdateLease(lease)
 		if err != nil {
 			return dhcp4.Packet{}, err
 		}
@@ -199,7 +303,7 @@ func (this *Server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
 	case dhcp4.Request:
 		//Request Received from client
 		//Lets get the lease we're going to send them
-		found, lease, err := this.GetLease(packet)
+		found, lease, err := s.GetLease(packet)
 		if err != nil {
 			return dhcp4.Packet{}, err
 		}
@@ -212,7 +316,7 @@ func (this *Server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
 		//If the lease is not the one requested We should send a NAK..
 		if len(packetOptions) > 0 && !net.IP(packetOptions[dhcp4.OptionRequestedIPAddress]).Equal(lease.IP) {
 			//NAK
-			declinePacket := this.DeclinePacket(packet)
+			declinePacket := s.DeclinePacket(packet)
 			declinePacket.PadToMinSize()
 
 			return declinePacket, nil
@@ -220,20 +324,20 @@ func (this *Server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
 			lease.Status = leasepool.Active
 			lease.MACAddress = packet.CHAddr()
 
-			lease.Expiry = time.Now().Add(this.Configuration.LeaseDuration)
+			lease.Expiry = time.Now().Add(s.leaseDuration)
 
 			if packetOptions[dhcp4.OptionHostName] != nil && string(packetOptions[dhcp4.OptionHostName]) != "" {
 				lease.Hostname = string(packetOptions[dhcp4.OptionHostName])
 			}
 
-			updated, err := this.LeasePool.UpdateLease(lease)
+			updated, err := s.leasePool.UpdateLease(lease)
 			if err != nil {
 				return dhcp4.Packet{}, err
 			}
 
 			if updated {
 				//ACK
-				acknowledgementPacket := this.AcknowledgementPacket(packet)
+				acknowledgementPacket := s.AcknowledgementPacket(packet)
 				acknowledgementPacket.SetYIAddr(lease.IP)
 
 				//Lease time.
@@ -243,7 +347,7 @@ func (this *Server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
 				return acknowledgementPacket, nil
 			} else {
 				//NAK
-				declinePacket := this.DeclinePacket(packet)
+				declinePacket := s.DeclinePacket(packet)
 				declinePacket.PadToMinSize()
 
 				return declinePacket, nil
@@ -267,7 +371,7 @@ func (this *Server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
 /*
  * Create DHCP Offer Packet
  */
-func (this *Server) OfferPacket(discoverPacket dhcp4.Packet) dhcp4.Packet {
+func (s *server) OfferPacket(discoverPacket dhcp4.Packet) dhcp4.Packet {
 
 	offerPacket := dhcp4.NewPacket(dhcp4.BootReply)
 	offerPacket.SetXId(discoverPacket.XId())
@@ -280,9 +384,9 @@ func (this *Server) OfferPacket(discoverPacket dhcp4.Packet) dhcp4.Packet {
 	//53
 	offerPacket.AddOption(dhcp4.OptionDHCPMessageType, []byte{byte(dhcp4.Offer)})
 	//54
-	offerPacket.AddOption(dhcp4.OptionServerIdentifier, this.Configuration.IP.To4())
+	offerPacket.AddOption(dhcp4.OptionServerIdentifier, s.ip.To4())
 	//51
-	offerPacket.AddOption(dhcp4.OptionIPAddressLeaseTime, dhcp4.OptionsLeaseTime(this.Configuration.LeaseDuration))
+	offerPacket.AddOption(dhcp4.OptionIPAddressLeaseTime, dhcp4.OptionsLeaseTime(s.leaseDuration))
 
 	//Other options go in requested order...
 	discoverPacketOptions := discoverPacket.ParseOptions()
@@ -290,11 +394,11 @@ func (this *Server) OfferPacket(discoverPacket dhcp4.Packet) dhcp4.Packet {
 	ourOptions := make(dhcp4.Options)
 
 	//1
-	ourOptions[dhcp4.OptionSubnetMask] = this.Configuration.SubnetMask.To4()
+	ourOptions[dhcp4.OptionSubnetMask] = s.subnetMask.To4()
 	//3
-	ourOptions[dhcp4.OptionRouter] = this.Configuration.DefaultGateway.To4()
+	ourOptions[dhcp4.OptionRouter] = s.defaultGateway.To4()
 	//6
-	ourOptions[dhcp4.OptionDomainNameServer] = dhcp4.JoinIPs(this.Configuration.DNSServers)
+	ourOptions[dhcp4.OptionDomainNameServer] = dhcp4.JoinIPs(s.dnsServers)
 
 	if discoverPacketOptions[dhcp4.OptionParameterRequestList] != nil {
 		//Loop through the requested options and if we have them add them.
@@ -318,7 +422,7 @@ func (this *Server) OfferPacket(discoverPacket dhcp4.Packet) dhcp4.Packet {
 /*
  * Create DHCP Acknowledgement
  */
-func (this *Server) AcknowledgementPacket(requestPacket dhcp4.Packet) dhcp4.Packet {
+func (s *server) AcknowledgementPacket(requestPacket dhcp4.Packet) dhcp4.Packet {
 
 	acknowledgementPacket := dhcp4.NewPacket(dhcp4.BootReply)
 	acknowledgementPacket.SetXId(requestPacket.XId())
@@ -329,10 +433,10 @@ func (this *Server) AcknowledgementPacket(requestPacket dhcp4.Packet) dhcp4.Pack
 	acknowledgementPacket.SetSecs(requestPacket.Secs())
 
 	acknowledgementPacket.AddOption(dhcp4.OptionDHCPMessageType, []byte{byte(dhcp4.ACK)})
-	acknowledgementPacket.AddOption(dhcp4.OptionSubnetMask, this.Configuration.SubnetMask.To4())
-	acknowledgementPacket.AddOption(dhcp4.OptionRouter, this.Configuration.DefaultGateway.To4())
-	acknowledgementPacket.AddOption(dhcp4.OptionDomainNameServer, dhcp4.JoinIPs(this.Configuration.DNSServers))
-	acknowledgementPacket.AddOption(dhcp4.OptionServerIdentifier, this.Configuration.IP.To4())
+	acknowledgementPacket.AddOption(dhcp4.OptionSubnetMask, s.subnetMask.To4())
+	acknowledgementPacket.AddOption(dhcp4.OptionRouter, s.defaultGateway.To4())
+	acknowledgementPacket.AddOption(dhcp4.OptionDomainNameServer, dhcp4.JoinIPs(s.dnsServers))
+	acknowledgementPacket.AddOption(dhcp4.OptionServerIdentifier, s.ip.To4())
 
 	return acknowledgementPacket
 }
@@ -340,7 +444,7 @@ func (this *Server) AcknowledgementPacket(requestPacket dhcp4.Packet) dhcp4.Pack
 /*
  * Create DHCP Decline
  */
-func (this *Server) DeclinePacket(requestPacket dhcp4.Packet) dhcp4.Packet {
+func (s *server) DeclinePacket(requestPacket dhcp4.Packet) dhcp4.Packet {
 
 	declinePacket := dhcp4.NewPacket(dhcp4.BootReply)
 	declinePacket.SetXId(requestPacket.XId())
@@ -351,10 +455,10 @@ func (this *Server) DeclinePacket(requestPacket dhcp4.Packet) dhcp4.Packet {
 	declinePacket.SetSecs(requestPacket.Secs())
 
 	declinePacket.AddOption(dhcp4.OptionDHCPMessageType, []byte{byte(dhcp4.NAK)})
-	declinePacket.AddOption(dhcp4.OptionSubnetMask, this.Configuration.SubnetMask.To4())
-	declinePacket.AddOption(dhcp4.OptionRouter, this.Configuration.DefaultGateway.To4())
-	declinePacket.AddOption(dhcp4.OptionDomainNameServer, dhcp4.JoinIPs(this.Configuration.DNSServers))
-	declinePacket.AddOption(dhcp4.OptionServerIdentifier, this.Configuration.IP.To4())
+	declinePacket.AddOption(dhcp4.OptionSubnetMask, s.subnetMask.To4())
+	declinePacket.AddOption(dhcp4.OptionRouter, s.defaultGateway.To4())
+	declinePacket.AddOption(dhcp4.OptionDomainNameServer, dhcp4.JoinIPs(s.dnsServers))
+	declinePacket.AddOption(dhcp4.OptionServerIdentifier, s.ip.To4())
 
 	return declinePacket
 }
@@ -363,7 +467,7 @@ func (this *Server) DeclinePacket(requestPacket dhcp4.Packet) dhcp4.Packet {
  * Get Lease tries to work out the best lease for the packet supplied.
  * Taking into account all Requested IP, Exisitng MACAddresses and Free leases.
  */
-func (t *Server) GetLease(packet dhcp4.Packet) (found bool, lease leasepool.Lease, err error) {
+func (s *server) GetLease(packet dhcp4.Packet) (found bool, lease leasepool.Lease, err error) {
 	packetOptions := packet.ParseOptions()
 
 	//Requested an IP
@@ -372,7 +476,7 @@ func (t *Server) GetLease(packet dhcp4.Packet) (found bool, lease leasepool.Leas
 		!net.IP(packetOptions[dhcp4.OptionRequestedIPAddress]).Equal(net.IP{}) {
 		//An IP Has Been Requested Let's Try and Get that One.
 
-		found, lease, err = t.LeasePool.GetLease(net.IP(packetOptions[dhcp4.OptionRequestedIPAddress]))
+		found, lease, err = s.leasePool.GetLease(net.IP(packetOptions[dhcp4.OptionRequestedIPAddress]))
 		if err != nil {
 			return
 		}
@@ -390,29 +494,29 @@ func (t *Server) GetLease(packet dhcp4.Packet) (found bool, lease leasepool.Leas
 	}
 
 	//Ok Even if you requested an IP you can't have it.
-	found, lease, err = t.LeasePool.GetLeaseForHardwareAddress(packet.CHAddr())
+	found, lease, err = s.leasePool.GetLeaseForHardwareAddress(packet.CHAddr())
 	if found || err != nil {
 		return
 	}
 
 	//Just get the next free lease if you can.
-	found, lease, err = t.LeasePool.GetNextFreeLease()
+	found, lease, err = s.leasePool.GetNextFreeLease()
 	return
 }
 
 /*
  * Shutdown The Server Gracefully
  */
-func (t *Server) Shutdown() {
-	t.shutdown = true
+func (s *server) Shutdown() {
+	s.shutdown = true
 }
 
 /*
  * Garbage Collection
  * Run Garbage Collection On Your Leases To Free Expired Leases.
  */
-func (t *Server) GC() error {
-	leases, err := t.LeasePool.GetLeases()
+func (s *server) GC() error {
+	leases, err := s.leasePool.GetLeases()
 	if err != nil {
 		return err
 	}
@@ -424,7 +528,7 @@ func (t *Server) GC() error {
 			if time.Now().After(leases[i].Expiry) {
 				//Lease has expired.
 				leases[i].Status = leasepool.Free
-				updated, err := t.LeasePool.UpdateLease(leases[i])
+				updated, err := s.leasePool.UpdateLease(leases[i])
 				if err != nil {
 					log.Printf("Warning: Error trying to Free Lease %s \"%v\"\n", leases[i].IP.To4().String(), err)
 				}
