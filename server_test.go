@@ -35,9 +35,12 @@ func ExampleServer() {
 		}
 	}
 
+	// We set the port numbers to over 1024 (1067 & 1068) as the automated test don't have root access
 	tServer, err := dhcp4server.New(
 		net.IPv4(192, 168, 1, 201),
 		&myMemoryLeasePool,
+		dhcp4server.SetLocalAddr(net.UDPAddr{IP: net.IPv4(0, 0, 0, 0), Port: 1067}),
+		dhcp4server.SetRemoteAddr(net.UDPAddr{IP: net.IPv4bcast, Port: 1068}),
 	)
 	if err != nil {
 		log.Fatalln("Error Configuring Server:" + err.Error())
@@ -61,6 +64,8 @@ func TestDiscoverOutOfRangeLease(test *testing.T) {
 	myServer, err := dhcp4server.New(
 		net.IPv4(192, 168, 1, 201),
 		getTestLeasePool(),
+		dhcp4server.SetLocalAddr(net.UDPAddr{IP: net.IPv4(0, 0, 0, 0), Port: 1067}),
+		dhcp4server.SetRemoteAddr(net.UDPAddr{IP: net.IPv4bcast, Port: 1068}),
 	)
 	if err != nil {
 		test.Error("Error: Can't Configure Server " + err.Error())
@@ -86,15 +91,15 @@ func TestDiscoverOutOfRangeLease(test *testing.T) {
 	}
 
 	//Lets Be A Client
-	client := dhcp4client.Client{
-		MACAddress:    HardwareMACAddress,
-		IgnoreServers: []net.IP{},
-		Timeout:       (time.Second * 5),
+
+	//We need to set the connection ports to 1068 and 1067 so we don't need root access
+	c, err := dhcp4client.NewInetSock(dhcp4client.SetLocalAddr(net.UDPAddr{IP: net.IPv4(0, 0, 0, 0), Port: 1068}), dhcp4client.SetRemoteAddr(net.UDPAddr{IP: net.IPv4bcast, Port: 1067}))
+	if err != nil {
+		test.Error("Client Conection Generation:" + err.Error())
 	}
 
-	err = client.Connect()
+	client, err := dhcp4client.New(dhcp4client.HardwareAddr(HardwareMACAddress), dhcp4client.Connection(c))
 	defer client.Close()
-
 	if err != nil {
 		test.Error("Conection Error:" + err.Error())
 	}
@@ -173,6 +178,8 @@ func TestRequestOutOfRangeLease(test *testing.T) {
 	myServer, err := dhcp4server.New(
 		net.IPv4(192, 168, 1, 201),
 		getTestLeasePool(),
+		dhcp4server.SetLocalAddr(net.UDPAddr{IP: net.IPv4(0, 0, 0, 0), Port: 1067}),
+		dhcp4server.SetRemoteAddr(net.UDPAddr{IP: net.IPv4bcast, Port: 1068}),
 	)
 	if err != nil {
 		test.Error("Error: Can't Configure Server " + err.Error())
@@ -204,13 +211,12 @@ func TestRequestOutOfRangeLease(test *testing.T) {
 	}
 
 	//Lets Be A Client
-	client := dhcp4client.Client{
-		MACAddress:    HardwareMACAddress,
-		IgnoreServers: []net.IP{},
-		Timeout:       (time.Second * 5),
+	c, err := dhcp4client.NewInetSock(dhcp4client.SetLocalAddr(net.UDPAddr{IP: net.IPv4(0, 0, 0, 0), Port: 1068}), dhcp4client.SetRemoteAddr(net.UDPAddr{IP: net.IPv4bcast, Port: 1067}))
+	if err != nil {
+		test.Error("Client Conection Generation:" + err.Error())
 	}
 
-	err = client.Connect()
+	client, err := dhcp4client.New(dhcp4client.HardwareAddr(HardwareMACAddress), dhcp4client.Connection(c))
 	defer client.Close()
 
 	if err != nil {
@@ -274,9 +280,9 @@ func TestConsumeLeases(test *testing.T) {
 
 	//Setup A Client
 	// Although We Won't send the packets over the network we'll use the client to create the requests.
-	client := dhcp4client.Client{
-		IgnoreServers: []net.IP{},
-		Timeout:       (time.Second * 5),
+	client, err := dhcp4client.New()
+	if err != nil {
+		test.Error("Error: Can't Configure Client " + err.Error())
 	}
 
 	for i := 0; i < 30; i++ {
@@ -286,9 +292,8 @@ func TestConsumeLeases(test *testing.T) {
 			test.Error("Error: Can't Generate Valid MACAddress" + err.Error())
 		}
 
-		client.MACAddress = HardwareMACAddress
-
-		test.Log("MAC:" + client.MACAddress.String())
+		client.SetOption(dhcp4client.HardwareAddr(HardwareMACAddress))
+		test.Log("MAC:" + HardwareMACAddress.String())
 
 		discovery := client.DiscoverPacket()
 
@@ -354,10 +359,7 @@ func BenchmarkServeDHCP(test *testing.B) {
 
 	//Setup A Client
 	// Although We Won't send the packets over the network we'll use the client to create the requests.
-	client := dhcp4client.Client{
-		IgnoreServers: []net.IP{},
-		Timeout:       (time.Second * 5),
-	}
+	client, err := dhcp4client.New()
 
 	test.ResetTimer()
 
@@ -369,7 +371,7 @@ func BenchmarkServeDHCP(test *testing.B) {
 			test.Error("Error: Can't Generate Valid MACAddress" + err.Error())
 		}
 
-		client.MACAddress = HardwareMACAddress
+		client.SetOption(dhcp4client.HardwareAddr(HardwareMACAddress))
 		discovery := client.DiscoverPacket()
 
 		//Run the Discovery On the Server

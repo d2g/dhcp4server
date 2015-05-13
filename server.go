@@ -13,12 +13,10 @@ import (
 	"golang.org/x/net/ipv4"
 )
 
-var ()
-
 /*
  * The DHCP Server Structure
  */
-type server struct {
+type Server struct {
 	//Configuration Options
 	ip                    net.IP             //The IP Address We Tell Clients The Server Is On.
 	defaultGateway        net.IP             //The Default Gateway Address
@@ -27,6 +25,12 @@ type server struct {
 	leaseDuration         time.Duration      //Number of Seconds
 	ignoreIPs             []net.IP           //Slice of IP's that should be ignored by the Server.
 	ignoreHardwareAddress []net.HardwareAddr //Slice of Hardware Addresses we should ignore.
+
+	//Local Address
+	laddr net.UDPAddr
+
+	//Remote address
+	raddr net.UDPAddr
 
 	//LeasePool
 	leasePool leasepool.LeasePool //Lease Pool Manager
@@ -38,14 +42,16 @@ type server struct {
 }
 
 // Create A New Server
-func New(ip net.IP, l leasepool.LeasePool, options ...func(*server) error) (*server, error) {
-	s := server{
+func New(ip net.IP, l leasepool.LeasePool, options ...func(*Server) error) (*Server, error) {
+	s := Server{
 		ip:             ip,
 		defaultGateway: ip,
 		dnsServers:     []net.IP{net.IPv4(208, 67, 222, 222), net.IPv4(208, 67, 220, 220)}, //OPENDNS
 		subnetMask:     net.IPv4(255, 255, 255, 0),
 		leaseDuration:  24 * time.Hour,
 		leasePool:      l,
+		laddr:          net.UDPAddr{IP: net.IPv4(0, 0, 0, 0), Port: 67},
+		raddr:          net.UDPAddr{IP: net.IPv4bcast, Port: 68},
 	}
 
 	err := s.setOptions(options...)
@@ -56,7 +62,7 @@ func New(ip net.IP, l leasepool.LeasePool, options ...func(*server) error) (*ser
 	return &s, err
 }
 
-func (s *server) setOptions(options ...func(*server) error) error {
+func (s *Server) setOptions(options ...func(*Server) error) error {
 	for _, opt := range options {
 		if err := opt(s); err != nil {
 			return err
@@ -66,8 +72,8 @@ func (s *server) setOptions(options ...func(*server) error) error {
 }
 
 // Set the Server IP
-func IP(i net.IP) func(*server) error {
-	return func(s *server) error {
+func IP(i net.IP) func(*Server) error {
+	return func(s *Server) error {
 		s.ip = i
 		return nil
 	}
@@ -75,57 +81,73 @@ func IP(i net.IP) func(*server) error {
 }
 
 // Set the Default Gateway Address.
-func DefaultGateway(r net.IP) func(*server) error {
-	return func(s *server) error {
+func DefaultGateway(r net.IP) func(*Server) error {
+	return func(s *Server) error {
 		s.defaultGateway = r
 		return nil
 	}
 }
 
 // Set the DNS servers.
-func DNSServers(dnss []net.IP) func(*server) error {
-	return func(s *server) error {
+func DNSServers(dnss []net.IP) func(*Server) error {
+	return func(s *Server) error {
 		s.dnsServers = dnss
 		return nil
 	}
 }
 
 // Set the Subnet Mask
-func SubnetMask(m net.IP) func(*server) error {
-	return func(s *server) error {
+func SubnetMask(m net.IP) func(*Server) error {
+	return func(s *Server) error {
 		s.subnetMask = m
 		return nil
 	}
 }
 
 // Set Lease Duration
-func LeaseDuration(d time.Duration) func(*server) error {
-	return func(s *server) error {
+func LeaseDuration(d time.Duration) func(*Server) error {
+	return func(s *Server) error {
 		s.leaseDuration = d
 		return nil
 	}
 }
 
 // Set Ignore IPs
-func IgnoreIPs(ips []net.IP) func(*server) error {
-	return func(s *server) error {
+func IgnoreIPs(ips []net.IP) func(*Server) error {
+	return func(s *Server) error {
 		s.ignoreIPs = ips
 		return nil
 	}
 }
 
 // Set Ignore Hardware Addresses
-func IgnoreHardwareAddresses(h []net.HardwareAddr) func(*server) error {
-	return func(s *server) error {
+func IgnoreHardwareAddresses(h []net.HardwareAddr) func(*Server) error {
+	return func(s *Server) error {
 		s.ignoreHardwareAddress = h
 		return nil
 	}
 }
 
 // Set LeasePool
-func LeasePool(p leasepool.LeasePool) func(*server) error {
-	return func(s *server) error {
+func LeasePool(p leasepool.LeasePool) func(*Server) error {
+	return func(s *Server) error {
 		s.leasePool = p
+		return nil
+	}
+}
+
+// Set The Local Address
+func SetLocalAddr(a net.UDPAddr) func(*Server) error {
+	return func(s *Server) error {
+		s.laddr = a
+		return nil
+	}
+}
+
+// Set The Remote Address
+func SetRemoteAddr(a net.UDPAddr) func(*Server) error {
+	return func(s *Server) error {
+		s.raddr = a
 		return nil
 	}
 }
@@ -133,14 +155,12 @@ func LeasePool(p leasepool.LeasePool) func(*server) error {
 /*
  * Start The DHCP Server
  */
-func (s *server) ListenAndServe() error {
+func (s *Server) ListenAndServe() error {
 	var err error
 
-	inboundAddress := net.UDPAddr{IP: net.IPv4(0, 0, 0, 0), Port: 67}
-
-	connection, err := net.ListenPacket("udp4", inboundAddress.String())
+	connection, err := net.ListenPacket("udp4", s.laddr.String())
 	if err != nil {
-		log.Printf("Debug: Error Returned From ListenPacket On \"%s\" Because of \"%s\"\n", inboundAddress.String(), err.Error())
+		log.Printf("Debug: Error Returned From ListenPacket On \"%s\" Because of \"%s\"\n", s.laddr.String(), err.Error())
 		return err
 	}
 	s.connection = ipv4.NewPacketConn(connection)
@@ -241,8 +261,7 @@ func (s *server) ListenAndServe() error {
 				log.Printf("Trace: Packet Gateway IP: %v\n", returnPacket.GIAddr().String())
 				log.Printf("Trace: Packet Client Mac: %v\n", returnPacket.CHAddr().String())
 
-				outboundAddress := net.UDPAddr{IP: net.IPv4bcast, Port: 68}
-				_, err = s.connection.WriteTo(returnPacket, control_message, &outboundAddress)
+				_, err = s.connection.WriteTo(returnPacket, control_message, &s.raddr)
 				if err != nil {
 					log.Println("Debug: Error Writing:" + err.Error())
 					return err
@@ -253,7 +272,7 @@ func (s *server) ListenAndServe() error {
 	}
 }
 
-func (s *server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
+func (s *Server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
 	packetOptions := packet.ParseOptions()
 
 	switch dhcp4.MessageType(packetOptions[dhcp4.OptionDHCPMessageType][0]) {
@@ -371,7 +390,7 @@ func (s *server) ServeDHCP(packet dhcp4.Packet) (dhcp4.Packet, error) {
 /*
  * Create DHCP Offer Packet
  */
-func (s *server) OfferPacket(discoverPacket dhcp4.Packet) dhcp4.Packet {
+func (s *Server) OfferPacket(discoverPacket dhcp4.Packet) dhcp4.Packet {
 
 	offerPacket := dhcp4.NewPacket(dhcp4.BootReply)
 	offerPacket.SetXId(discoverPacket.XId())
@@ -422,7 +441,7 @@ func (s *server) OfferPacket(discoverPacket dhcp4.Packet) dhcp4.Packet {
 /*
  * Create DHCP Acknowledgement
  */
-func (s *server) AcknowledgementPacket(requestPacket dhcp4.Packet) dhcp4.Packet {
+func (s *Server) AcknowledgementPacket(requestPacket dhcp4.Packet) dhcp4.Packet {
 
 	acknowledgementPacket := dhcp4.NewPacket(dhcp4.BootReply)
 	acknowledgementPacket.SetXId(requestPacket.XId())
@@ -444,7 +463,7 @@ func (s *server) AcknowledgementPacket(requestPacket dhcp4.Packet) dhcp4.Packet 
 /*
  * Create DHCP Decline
  */
-func (s *server) DeclinePacket(requestPacket dhcp4.Packet) dhcp4.Packet {
+func (s *Server) DeclinePacket(requestPacket dhcp4.Packet) dhcp4.Packet {
 
 	declinePacket := dhcp4.NewPacket(dhcp4.BootReply)
 	declinePacket.SetXId(requestPacket.XId())
@@ -467,7 +486,7 @@ func (s *server) DeclinePacket(requestPacket dhcp4.Packet) dhcp4.Packet {
  * Get Lease tries to work out the best lease for the packet supplied.
  * Taking into account all Requested IP, Exisitng MACAddresses and Free leases.
  */
-func (s *server) GetLease(packet dhcp4.Packet) (found bool, lease leasepool.Lease, err error) {
+func (s *Server) GetLease(packet dhcp4.Packet) (found bool, lease leasepool.Lease, err error) {
 	packetOptions := packet.ParseOptions()
 
 	//Requested an IP
@@ -507,7 +526,7 @@ func (s *server) GetLease(packet dhcp4.Packet) (found bool, lease leasepool.Leas
 /*
  * Shutdown The Server Gracefully
  */
-func (s *server) Shutdown() {
+func (s *Server) Shutdown() {
 	s.shutdown = true
 }
 
@@ -515,7 +534,7 @@ func (s *server) Shutdown() {
  * Garbage Collection
  * Run Garbage Collection On Your Leases To Free Expired Leases.
  */
-func (s *server) GC() error {
+func (s *Server) GC() error {
 	leases, err := s.leasePool.GetLeases()
 	if err != nil {
 		return err
