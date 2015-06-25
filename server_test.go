@@ -64,8 +64,8 @@ func TestDiscoverOutOfRangeLease(test *testing.T) {
 	myServer, err := dhcp4server.New(
 		net.IPv4(192, 168, 1, 201),
 		getTestLeasePool(),
-		dhcp4server.SetLocalAddr(net.UDPAddr{IP: net.IPv4(0, 0, 0, 0), Port: 1067}),
-		dhcp4server.SetRemoteAddr(net.UDPAddr{IP: net.IPv4bcast, Port: 1068}),
+		dhcp4server.SetLocalAddr(net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1067}),
+		dhcp4server.SetRemoteAddr(net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1068}),
 	)
 	if err != nil {
 		test.Error("Error: Can't Configure Server " + err.Error())
@@ -93,7 +93,7 @@ func TestDiscoverOutOfRangeLease(test *testing.T) {
 	//Lets Be A Client
 
 	//We need to set the connection ports to 1068 and 1067 so we don't need root access
-	c, err := dhcp4client.NewInetSock(dhcp4client.SetLocalAddr(net.UDPAddr{IP: net.IPv4(0, 0, 0, 0), Port: 1068}), dhcp4client.SetRemoteAddr(net.UDPAddr{IP: net.IPv4bcast, Port: 1067}))
+	c, err := dhcp4client.NewInetSock(dhcp4client.SetLocalAddr(net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1068}), dhcp4client.SetRemoteAddr(net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1067}))
 	if err != nil {
 		test.Error("Client Conection Generation:" + err.Error())
 	}
@@ -178,8 +178,8 @@ func TestRequestOutOfRangeLease(test *testing.T) {
 	myServer, err := dhcp4server.New(
 		net.IPv4(192, 168, 1, 201),
 		getTestLeasePool(),
-		dhcp4server.SetLocalAddr(net.UDPAddr{IP: net.IPv4(0, 0, 0, 0), Port: 1067}),
-		dhcp4server.SetRemoteAddr(net.UDPAddr{IP: net.IPv4bcast, Port: 1068}),
+		dhcp4server.SetLocalAddr(net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1067}),
+		dhcp4server.SetRemoteAddr(net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1068}),
 	)
 	if err != nil {
 		test.Error("Error: Can't Configure Server " + err.Error())
@@ -211,7 +211,7 @@ func TestRequestOutOfRangeLease(test *testing.T) {
 	}
 
 	//Lets Be A Client
-	c, err := dhcp4client.NewInetSock(dhcp4client.SetLocalAddr(net.UDPAddr{IP: net.IPv4(0, 0, 0, 0), Port: 1068}), dhcp4client.SetRemoteAddr(net.UDPAddr{IP: net.IPv4bcast, Port: 1067}))
+	c, err := dhcp4client.NewInetSock(dhcp4client.SetLocalAddr(net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1068}), dhcp4client.SetRemoteAddr(net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1067}))
 	if err != nil {
 		test.Error("Client Conection Generation:" + err.Error())
 	}
@@ -271,7 +271,7 @@ func TestRequestOutOfRangeLease(test *testing.T) {
 func TestConsumeLeases(test *testing.T) {
 	//Setup the Server
 	myServer, err := dhcp4server.New(
-		net.IPv4(192, 168, 1, 201),
+		net.IPv4(127, 0, 0, 1),
 		getTestLeasePool(),
 	)
 	if err != nil {
@@ -350,7 +350,7 @@ func BenchmarkServeDHCP(test *testing.B) {
 
 	//Setup the Server
 	myServer, err := dhcp4server.New(
-		net.IPv4(192, 168, 1, 201),
+		net.IPv4(127, 0, 0, 1),
 		&myMemoryLeasePool,
 	)
 	if err != nil {
