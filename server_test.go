@@ -278,12 +278,18 @@ func TestConsumeLeases(test *testing.T) {
 		test.Error("Error: Can't Configure Server " + err.Error())
 	}
 
-	//Setup A Client
+	// Setup A Client
 	// Although We Won't send the packets over the network we'll use the client to create the requests.
-	client, err := dhcp4client.New()
+	c, err := dhcp4client.NewInetSock(dhcp4client.SetLocalAddr(net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1068}), dhcp4client.SetRemoteAddr(net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1067}))
+	if err != nil {
+		test.Error("Client Conection Generation:" + err.Error())
+	}
+
+	client, err := dhcp4client.New(dhcp4client.Connection(c))
 	if err != nil {
 		test.Error("Error: Can't Configure Client " + err.Error())
 	}
+	defer client.Close()
 
 	for i := 0; i < 30; i++ {
 		//Generate Hardware Address
@@ -359,7 +365,16 @@ func BenchmarkServeDHCP(test *testing.B) {
 
 	//Setup A Client
 	// Although We Won't send the packets over the network we'll use the client to create the requests.
-	client, err := dhcp4client.New()
+	c, err := dhcp4client.NewInetSock(dhcp4client.SetLocalAddr(net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1068}), dhcp4client.SetRemoteAddr(net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1067}))
+	if err != nil {
+		test.Error("Client Conection Generation:" + err.Error())
+	}
+
+	client, err := dhcp4client.New(dhcp4client.Connection(c))
+	if err != nil {
+		test.Error("Error: Can't Configure Client " + err.Error())
+	}
+	defer client.Close()
 
 	test.ResetTimer()
 
