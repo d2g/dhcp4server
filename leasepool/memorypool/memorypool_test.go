@@ -21,12 +21,36 @@ func TestLeaseCycle(test *testing.T) {
 
 	for i := 0; i < 30; i++ {
 		hasLease, iLease, err := myMemoryLeasePool.GetNextFreeLease()
-		if err != nil || !hasLease {
+		if err != nil {
 			test.Error("Error Getting Lease:" + err.Error())
+		}
+		if !hasLease {
+			test.Error("Failed to get get lease (none free?)")
 		}
 
 		if !dhcp4.IPAdd(net.IPv4(192, 168, 1, 1), i).Equal(iLease.IP) {
 			test.Error("Expected Lease:" + dhcp4.IPAdd(net.IPv4(192, 168, 1, 1), i).String() + " Received:" + iLease.IP.String())
 		}
+	}
+}
+
+func TestSingleLease(test *testing.T) {
+	myMemoryLeasePool := MemoryPool{}
+
+	err := myMemoryLeasePool.AddLease(leasepool.Lease{IP: dhcp4.IPAdd(net.IPv4(192, 168, 1, 5), 0)})
+	if err != nil {
+		test.Error("Error Creating Lease:" + err.Error())
+	}
+
+	hasLease, iLease, err := myMemoryLeasePool.GetNextFreeLease()
+	if err != nil {
+		test.Error("Error Getting Lease:" + err.Error())
+	}
+	if !hasLease {
+		test.Error("Failed to get get lease (none free?)")
+	}
+
+	if !dhcp4.IPAdd(net.IPv4(192, 168, 1, 5), 0).Equal(iLease.IP) {
+		test.Error("Expected Lease:" + dhcp4.IPAdd(net.IPv4(192, 168, 1, 5), 0).String() + " Received:" + iLease.IP.String())
 	}
 }
