@@ -213,7 +213,6 @@ func (s *Server) ListenAndServe() error {
 			}
 
 			log.Printf("Debug: Unexpect Error from Connection Read From: %v\n", err)
-			log.Printf("Debug: err type %T %#v\n", err, err)
 			return err
 		}
 
