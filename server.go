@@ -172,9 +172,6 @@ func (s *Server) ListenAndServe() error {
 	//	return err
 	//}
 
-	//Make Our Buffer (Max Buffer is 574) "I believe this 576 size comes from RFC 791" - Random Mailing list quote of the day.
-	buffer := make([]byte, 576)
-
 	log.Println("Trace: DHCP Server Listening.")
 
 	for {
@@ -182,6 +179,9 @@ func (s *Server) ListenAndServe() error {
 		if s.shouldShutdown() {
 			return nil
 		}
+
+		//Make Our Buffer (Max Buffer is 574) "I believe this 576 size comes from RFC 791" - Random Mailing list quote of the day.
+		buffer := make([]byte, 576)
 
 		//Set Read Deadline
 		s.connection.SetReadDeadline(time.Now().Add(time.Second))
